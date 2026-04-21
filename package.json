@@ -38,6 +38,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/cli.ts",
+    "test": "npm run build && node --test",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build"
   },

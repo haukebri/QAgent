@@ -1,0 +1,56 @@
+{
+  "name": "@qagent/cli",
+  "version": "0.0.0",
+  "description": "End-to-end tests from prose goals. Drives Claude Code + agent-browser, records evidence, can promote passing runs to Playwright tests.",
+  "keywords": [
+    "e2e",
+    "testing",
+    "playwright",
+    "claude",
+    "claude-code",
+    "ai",
+    "qa",
+    "agent-browser",
+    "browser-automation"
+  ],
+  "homepage": "https://github.com/haukebri/QAgent#readme",
+  "bugs": {
+    "url": "https://github.com/haukebri/QAgent/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/haukebri/QAgent.git"
+  },
+  "license": "MIT",
+  "author": "Hauke Brinkmann <haukebr@gmail.com>",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "qagent": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "cac": "^6.7.14",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

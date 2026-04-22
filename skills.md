@@ -1,0 +1,32 @@
+# QAgent Skills Description
+
+- QAgent is an AI-native QA CLI for prose-driven end-to-end browser checks against live web apps.
+- The main user is a vibe-coder working with an AI coding agent and wanting a fast real-browser correctness signal.
+- The simplest first-run path is a one-off command: `qagent --url <url> --goal "<goal>"`.
+- The project-mode path uses `qagent.config.json`, `goals.json`, `.qagent/test-credentials.json`, and optionally this `skills.md`.
+- Goals should stay in plain English and describe user-visible outcomes, not implementation details or selectors.
+- A good goal sounds like: "I can login as the default user and see the dashboard overview."
+- QAgent starts the `agent-browser` session before Claude begins, so the page is already opened when the model starts working.
+- HTTP basic auth is handled deterministically before page load when credentials are provided.
+- The `skills.md` file is optional context for the model. It should explain terminology, workflows, roles, seeded data, and UI quirks.
+- `skills.md` is context, not proof. QAgent must still verify the behavior live in the browser.
+- Parallel execution is an important product feature and should remain opt-in through `--parallel`.
+- `doctor` is an important command. It should verify Node, `claude`, `agent-browser`, and actual browser startup readiness.
+- This tool does not generate Playwright tests and does not include a setup/init wizard.
+- Each goal runs in a fresh browser session with no shared state between goals.
+- Every run should produce artifacts in `.qagent/runs/...`, including screenshots, `result.json`, and `claude-session.log`.
+- Result meanings:
+- `pass` means the behavior was verified end-to-end.
+- `fail` means the app was testable but did not behave as expected.
+- `blocked` means the flow could not be completed because of setup problems, crashes, missing data, auth failure, or other run blockers.
+- Exit codes:
+- `0` all goals passed.
+- `1` at least one goal failed or was blocked.
+- `2` setup error.
+- `3` Claude Code session crashed.
+- Important current product direction:
+- no Playwright generation in this repo
+- no `qagent init`
+- yes to pre-started browser sessions
+- yes to project-local config and optional project-local skills descriptions
+- yes to parallel multi-goal runs when explicitly requested

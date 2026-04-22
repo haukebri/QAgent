@@ -20,10 +20,10 @@ No config. No scaffold. Just run one goal against a live app.
 ```bash
 npm install -g @qagent/cli
 qagent doctor
-qagent --url http://localhost:3000 --goal "I can open the homepage and see the main heading"
+qagent --url https://github.com/haukebri/QAgent --goal "I can see how qagent can be used"
 ```
 
-If your local app is running, that is enough to prove the full loop works.
+That is enough to prove the full loop works without needing a local app first.
 
 ## Tell Your AI
 
@@ -33,7 +33,7 @@ The current best UX for tools like this is to tell your coding agent exactly wha
 
 Tell Claude Code, Codex, or your coding agent:
 
-> Install QAgent, run `qagent doctor`, then test my app at `http://localhost:3000` with this goal: `I can open the homepage and see the main heading`. Show me whether it passed and where the screenshots were saved.
+> Install QAgent, run `qagent doctor`, then test `https://github.com/haukebri/QAgent` with this goal: `I can see how qagent can be used`. Show me whether it passed and where the screenshots were saved.
 
 ### Set It Up For This Project
 
@@ -172,7 +172,7 @@ Think of `skills.md` as product context, not truth. QAgent still has to verify b
 qagent
 
 # Run one goal without config
-qagent --url http://localhost:3000 --goal "I can open the homepage and see the main heading"
+qagent --url https://github.com/haukebri/QAgent --goal "I can see how qagent can be used"
 
 # Run goals from a specific file
 qagent --goals tests/e2e/goals.json --url https://staging.example.com

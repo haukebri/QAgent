@@ -304,10 +304,11 @@ Current checks:
 - Node.js version
 - `claude` in `PATH`
 - `agent-browser` in `PATH`
+- a real headless `agent-browser open about:blank` launch
 
 This command should stay lightweight and fast.
 
-If browser startup still fails on first real run, the likely next step is `agent-browser install`.
+If the browser-launch check fails, the likely next step is `agent-browser install`.
 
 ---
 

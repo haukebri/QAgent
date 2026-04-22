@@ -37,6 +37,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/cli.ts",
+    "doctor": "tsx src/cli.ts doctor",
     "test": "npm run build && node --test",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build"

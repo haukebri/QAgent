@@ -112,7 +112,26 @@ async function createAgentBrowserStub(tempDir) {
   await writeFile(
     unixWrapper,
     `#!/bin/sh
+if [ -n "$QAGENT_AGENT_BROWSER_LOG_PATH" ]; then
+  printf '%s\\n' "$*" >> "$QAGENT_AGENT_BROWSER_LOG_PATH"
+fi
+
+cmd=""
+for arg in "$@"; do
+  case "$arg" in
+    open|close|set|session|snapshot)
+      cmd="$arg"
+      break
+      ;;
+  esac
+done
+
 if [ "$QAGENT_AGENT_BROWSER_MODE" = "fail" ]; then
+  echo "\${QAGENT_AGENT_BROWSER_STDERR:-agent-browser failed}" >&2
+  exit "\${QAGENT_AGENT_BROWSER_EXIT_CODE:-23}"
+fi
+
+if [ "$QAGENT_AGENT_BROWSER_MODE" = "fail-open" ] && [ "$cmd" = "open" ]; then
   echo "\${QAGENT_AGENT_BROWSER_STDERR:-agent-browser failed}" >&2
   exit "\${QAGENT_AGENT_BROWSER_EXIT_CODE:-23}"
 fi
@@ -126,7 +145,25 @@ exit 0
   await writeFile(
     windowsWrapper,
     `@echo off
+if not "%QAGENT_AGENT_BROWSER_LOG_PATH%"=="" (
+  echo %*>>"%QAGENT_AGENT_BROWSER_LOG_PATH%"
+)
+
+set cmd=
+for %%A in (%*) do (
+  if "%%A"=="open" set cmd=open
+  if "%%A"=="close" set cmd=close
+  if "%%A"=="set" set cmd=set
+  if "%%A"=="session" set cmd=session
+  if "%%A"=="snapshot" set cmd=snapshot
+)
+
 if "%QAGENT_AGENT_BROWSER_MODE%"=="fail" (
+  1>&2 echo %QAGENT_AGENT_BROWSER_STDERR%
+  if "%QAGENT_AGENT_BROWSER_EXIT_CODE%"=="" exit /b 23
+  exit /b %QAGENT_AGENT_BROWSER_EXIT_CODE%
+)
+if "%QAGENT_AGENT_BROWSER_MODE%"=="fail-open" if "%cmd%"=="open" (
   1>&2 echo %QAGENT_AGENT_BROWSER_STDERR%
   if "%QAGENT_AGENT_BROWSER_EXIT_CODE%"=="" exit /b 23
   exit /b %QAGENT_AGENT_BROWSER_EXIT_CODE%
@@ -184,6 +221,7 @@ test("one-off run succeeds and writes result plus session log", async (t) => {
       PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
       QAGENT_CLAUDE_STDOUT: "stub stdout\n",
       QAGENT_CLAUDE_STDERR: "stub stderr\n",
+      QAGENT_AGENT_BROWSER_LOG_PATH: path.join(tempDir, "agent-browser.log"),
     },
   });
 
@@ -203,6 +241,13 @@ test("one-off run succeeds and writes result plus session log", async (t) => {
   const logText = await readFile(path.join(runsRoot, runDir, "claude-session.log"), "utf8");
   assert.match(logText, /stub stdout/);
   assert.match(logText, /stub stderr/);
+
+  const sessionName = result.stdout.match(/Browser ready \(session: ([^)]+)\)/)?.[1];
+  assert.ok(sessionName, "expected browser session name in stdout");
+
+  const browserLog = await readFile(path.join(tempDir, "agent-browser.log"), "utf8");
+  assert.match(browserLog, new RegExp(`--session ${sessionName} open https://example\\.com`));
+  assert.match(browserLog, new RegExp(`--session ${sessionName} close`));
 });
 
 test("one-off run can load baseUrl and defaults from qagent.config.json in the project root", async (t) => {
@@ -510,6 +555,7 @@ test("timeout is classified as blocked instead of a Claude crash", async (t) => 
       ...process.env,
       PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
       QAGENT_CLAUDE_DELAY_MS: "2000",
+      QAGENT_AGENT_BROWSER_LOG_PATH: path.join(tempDir, "agent-browser.log"),
     },
   });
 
@@ -520,6 +566,54 @@ test("timeout is classified as blocked instead of a Claude crash", async (t) => 
   const [runDir] = await getRunDirs(tempDir);
   const logText = await readFile(path.join(tempDir, ".qagent", "runs", runDir, "claude-session.log"), "utf8");
   assert.match(logText, /Timeout reached after 50ms; stopping Claude/);
+
+  const sessionName = result.stdout.match(/Browser ready \(session: ([^)]+)\)/)?.[1];
+  assert.ok(sessionName, "expected browser session name in stdout");
+
+  const browserLog = await readFile(path.join(tempDir, "agent-browser.log"), "utf8");
+  assert.match(browserLog, new RegExp(`--session ${sessionName} close`));
+});
+
+test("doctor succeeds when dependencies are present and agent-browser can launch a browser session", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const claudeBinDir = await createClaudeStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["doctor"],
+    env: {
+      ...process.env,
+      PATH: `${claudeBinDir}${path.delimiter}${process.env.PATH ?? ""}`,
+    },
+  });
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /OK\s+Node\.js/);
+  assert.match(result.stdout, /OK\s+Claude Code/);
+  assert.match(result.stdout, /OK\s+agent-browser/);
+  assert.match(result.stdout, /OK\s+Browser launch/);
+});
+
+test("doctor fails when agent-browser cannot launch the browser", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const claudeBinDir = await createClaudeStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["doctor"],
+    env: {
+      ...process.env,
+      PATH: `${claudeBinDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      QAGENT_AGENT_BROWSER_MODE: "fail-open",
+      QAGENT_AGENT_BROWSER_STDERR: "browser binary missing",
+    },
+  });
+
+  assert.equal(result.code, 1);
+  assert.match(result.stdout, /MISSING\s+Browser launch/);
+  assert.match(result.stdout, /agent-browser install/);
 });
 
 test("suite mode preserves Claude crash exit code", async (t) => {

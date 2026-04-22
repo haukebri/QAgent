@@ -202,6 +202,18 @@ function runCli({ args, cwd, env }) {
   });
 }
 
+function getInstalledSkillPath(claudeConfigDir) {
+  return path.join(claudeConfigDir, "skills", "qagent", "SKILL.md");
+}
+
+function getBundledSkillPath() {
+  return path.join(repoRoot, "skills", "qagent", "SKILL.md");
+}
+
+function getBundledSkillCorePath() {
+  return path.join(repoRoot, "skills", "qagent", "core.md");
+}
+
 async function getRunDirs(tempDir) {
   const runsRoot = path.join(tempDir, ".qagent", "runs");
   const entries = await readdir(runsRoot, { withFileTypes: true });
@@ -574,16 +586,223 @@ test("timeout is classified as blocked instead of a Claude crash", async (t) => 
   assert.match(browserLog, new RegExp(`--session ${sessionName} close`));
 });
 
+test("skill path prints the resolved install path", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const claudeConfigDir = path.join(tempDir, "claude-config");
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["skill", "path"],
+    env: {
+      ...process.env,
+      CLAUDE_CONFIG_DIR: claudeConfigDir,
+      PATH: "/usr/bin:/bin",
+    },
+  });
+
+  assert.equal(result.code, 0);
+  assert.equal(result.stderr, "");
+  assert.equal(result.stdout.trim(), getInstalledSkillPath(claudeConfigDir));
+});
+
+test("skill install copies the bundled skill into CLAUDE_CONFIG_DIR", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const claudeConfigDir = path.join(tempDir, "claude-config");
+  const installedSkillPath = getInstalledSkillPath(claudeConfigDir);
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["skill", "install"],
+    env: {
+      ...process.env,
+      CLAUDE_CONFIG_DIR: claudeConfigDir,
+      PATH: "/usr/bin:/bin",
+    },
+  });
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /Installed QAgent skill to/);
+
+  const installedSkill = await readFile(installedSkillPath, "utf8");
+  const bundledSkill = await readFile(getBundledSkillPath(), "utf8");
+  assert.equal(installedSkill, bundledSkill);
+  assert.match(installedSkill, /qagent skills get core/);
+  assert.doesNotMatch(installedSkill, /qagent run/);
+});
+
+test("second skill install without --force is a no-op", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const claudeConfigDir = path.join(tempDir, "claude-config");
+  const installedSkillPath = getInstalledSkillPath(claudeConfigDir);
+
+  await runCli({
+    cwd: tempDir,
+    args: ["skill", "install"],
+    env: {
+      ...process.env,
+      CLAUDE_CONFIG_DIR: claudeConfigDir,
+      PATH: "/usr/bin:/bin",
+    },
+  });
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["skill", "install"],
+    env: {
+      ...process.env,
+      CLAUDE_CONFIG_DIR: claudeConfigDir,
+      PATH: "/usr/bin:/bin",
+    },
+  });
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /Skill already installed at/);
+
+  const installedSkill = await readFile(installedSkillPath, "utf8");
+  const bundledSkill = await readFile(getBundledSkillPath(), "utf8");
+  assert.equal(installedSkill, bundledSkill);
+});
+
+test("skill install --force overwrites an existing install", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const claudeConfigDir = path.join(tempDir, "claude-config");
+  const installedSkillPath = getInstalledSkillPath(claudeConfigDir);
+
+  await runCli({
+    cwd: tempDir,
+    args: ["skill", "install"],
+    env: {
+      ...process.env,
+      CLAUDE_CONFIG_DIR: claudeConfigDir,
+      PATH: "/usr/bin:/bin",
+    },
+  });
+
+  await writeFile(installedSkillPath, "stale skill contents\n", "utf8");
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["skill", "install", "--force"],
+    env: {
+      ...process.env,
+      CLAUDE_CONFIG_DIR: claudeConfigDir,
+      PATH: "/usr/bin:/bin",
+    },
+  });
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /Installed QAgent skill to/);
+
+  const installedSkill = await readFile(installedSkillPath, "utf8");
+  const bundledSkill = await readFile(getBundledSkillPath(), "utf8");
+  assert.equal(installedSkill, bundledSkill);
+});
+
+test("skills get core prints the runtime skill workflow content", async (t) => {
+  const tempDir = await makeTempDir(t);
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["skills", "get", "core"],
+    env: {
+      ...process.env,
+      PATH: "/usr/bin:/bin",
+    },
+  });
+
+  assert.equal(result.code, 0);
+  assert.equal(result.stderr, "");
+
+  const bundledCore = await readFile(getBundledSkillCorePath(), "utf8");
+  assert.equal(result.stdout, bundledCore);
+  assert.match(result.stdout, /qagent --url <url> --goal/);
+  assert.doesNotMatch(result.stdout, /qagent run/);
+});
+
+test("skill install --dry-run does not create files", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const claudeConfigDir = path.join(tempDir, "claude-config");
+  const installedSkillPath = getInstalledSkillPath(claudeConfigDir);
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["skill", "install", "--dry-run"],
+    env: {
+      ...process.env,
+      CLAUDE_CONFIG_DIR: claudeConfigDir,
+      PATH: "/usr/bin:/bin",
+    },
+  });
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /Would install QAgent skill to/);
+  await assert.rejects(readFile(installedSkillPath, "utf8"), { code: "ENOENT" });
+});
+
+test("skill uninstall removes the skill file and empty qagent directory", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const claudeConfigDir = path.join(tempDir, "claude-config");
+  const installedSkillPath = getInstalledSkillPath(claudeConfigDir);
+  const skillDir = path.dirname(installedSkillPath);
+  const skillsDir = path.dirname(skillDir);
+
+  await runCli({
+    cwd: tempDir,
+    args: ["skill", "install"],
+    env: {
+      ...process.env,
+      CLAUDE_CONFIG_DIR: claudeConfigDir,
+      PATH: "/usr/bin:/bin",
+    },
+  });
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["skill", "uninstall"],
+    env: {
+      ...process.env,
+      CLAUDE_CONFIG_DIR: claudeConfigDir,
+      PATH: "/usr/bin:/bin",
+    },
+  });
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /Removed /);
+  await assert.rejects(readFile(installedSkillPath, "utf8"), { code: "ENOENT" });
+  await assert.rejects(readdir(skillDir), { code: "ENOENT" });
+  assert.deepEqual(await readdir(skillsDir), []);
+});
+
+test("skill uninstall is friendly when nothing is installed", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const claudeConfigDir = path.join(tempDir, "claude-config");
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["skill", "uninstall"],
+    env: {
+      ...process.env,
+      CLAUDE_CONFIG_DIR: claudeConfigDir,
+      PATH: "/usr/bin:/bin",
+    },
+  });
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /Skill not installed\./);
+});
+
 test("doctor succeeds when dependencies are present and agent-browser can launch a browser session", async (t) => {
   const tempDir = await makeTempDir(t);
   const claudeBinDir = await createClaudeStub(tempDir);
   await createAgentBrowserStub(tempDir);
+  const claudeConfigDir = path.join(tempDir, "claude-config");
 
   const result = await runCli({
     cwd: tempDir,
     args: ["doctor"],
     env: {
       ...process.env,
+      CLAUDE_CONFIG_DIR: claudeConfigDir,
       PATH: `${claudeBinDir}${path.delimiter}${process.env.PATH ?? ""}`,
     },
   });
@@ -593,18 +812,21 @@ test("doctor succeeds when dependencies are present and agent-browser can launch
   assert.match(result.stdout, /OK\s+Claude Code/);
   assert.match(result.stdout, /OK\s+agent-browser/);
   assert.match(result.stdout, /OK\s+Browser launch/);
+  assert.match(result.stdout, /INFO\s+Claude skill\s+Skill not installed \(run: qagent skill install\)/);
 });
 
 test("doctor fails when agent-browser cannot launch the browser", async (t) => {
   const tempDir = await makeTempDir(t);
   const claudeBinDir = await createClaudeStub(tempDir);
   await createAgentBrowserStub(tempDir);
+  const claudeConfigDir = path.join(tempDir, "claude-config");
 
   const result = await runCli({
     cwd: tempDir,
     args: ["doctor"],
     env: {
       ...process.env,
+      CLAUDE_CONFIG_DIR: claudeConfigDir,
       PATH: `${claudeBinDir}${path.delimiter}${process.env.PATH ?? ""}`,
       QAGENT_AGENT_BROWSER_MODE: "fail-open",
       QAGENT_AGENT_BROWSER_STDERR: "browser binary missing",
@@ -614,6 +836,60 @@ test("doctor fails when agent-browser cannot launch the browser", async (t) => {
   assert.equal(result.code, 1);
   assert.match(result.stdout, /MISSING\s+Browser launch/);
   assert.match(result.stdout, /agent-browser install/);
+});
+
+test("doctor reports an installed skill as up to date", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const claudeBinDir = await createClaudeStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+  const claudeConfigDir = path.join(tempDir, "claude-config");
+
+  await runCli({
+    cwd: tempDir,
+    args: ["skill", "install"],
+    env: {
+      ...process.env,
+      CLAUDE_CONFIG_DIR: claudeConfigDir,
+      PATH: "/usr/bin:/bin",
+    },
+  });
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["doctor"],
+    env: {
+      ...process.env,
+      CLAUDE_CONFIG_DIR: claudeConfigDir,
+      PATH: `${claudeBinDir}${path.delimiter}${process.env.PATH ?? ""}`,
+    },
+  });
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /INFO\s+Claude skill\s+Skill installed \(up to date\)/);
+});
+
+test("doctor reports an installed skill as out of date", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const claudeBinDir = await createClaudeStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+  const claudeConfigDir = path.join(tempDir, "claude-config");
+  const installedSkillPath = getInstalledSkillPath(claudeConfigDir);
+
+  await mkdir(path.dirname(installedSkillPath), { recursive: true });
+  await writeFile(installedSkillPath, "older skill contents\n", "utf8");
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["doctor"],
+    env: {
+      ...process.env,
+      CLAUDE_CONFIG_DIR: claudeConfigDir,
+      PATH: `${claudeBinDir}${path.delimiter}${process.env.PATH ?? ""}`,
+    },
+  });
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /INFO\s+Claude skill\s+Skill installed \(out of date — run: qagent skill install --force\)/);
 });
 
 test("suite mode preserves Claude crash exit code", async (t) => {

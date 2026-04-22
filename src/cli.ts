@@ -42,6 +42,205 @@ function parsePositiveIntegerOption(value: unknown): number | null | undefined {
   return parsed;
 }
 
+function printSkillCommandHelp(subcommand?: "install" | "path" | "uninstall"): void {
+  if (subcommand === "install") {
+    console.log(`Usage:
+  $ qagent skill install [--force] [--dry-run]
+
+Install the QAgent Claude Code skill into the user's Claude config directory.
+
+Options:
+  --force    Overwrite the destination file if it already exists
+  --dry-run  Print what would happen without touching the filesystem
+  -h, --help Display this message`);
+    return;
+  }
+
+  if (subcommand === "uninstall") {
+    console.log(`Usage:
+  $ qagent skill uninstall
+
+Remove the installed QAgent skill.
+
+Options:
+  -h, --help Display this message`);
+    return;
+  }
+
+  if (subcommand === "path") {
+    console.log(`Usage:
+  $ qagent skill path
+
+Print the resolved install path without installing anything.
+
+Options:
+  -h, --help Display this message`);
+    return;
+  }
+
+  console.log(`Usage:
+  $ qagent skill install [--force] [--dry-run]
+  $ qagent skill uninstall
+  $ qagent skill path`);
+}
+
+function printSkillsCommandHelp(topic?: "get core"): void {
+  if (topic === "get core") {
+    console.log(`Usage:
+  $ qagent skills get core
+
+Print the runtime QAgent assistant workflow content.
+
+Options:
+  -h, --help Display this message`);
+    return;
+  }
+
+  console.log(`Usage:
+  $ qagent skills get core`);
+}
+
+async function maybeRunBuiltinMetaCommand(argv: string[]): Promise<boolean> {
+  if (argv[0] !== "skill") {
+    if (argv[0] !== "skills") {
+      return false;
+    }
+
+    const subcommand = argv[1];
+    const topic = argv[2];
+    const tail = argv.slice(3);
+
+    if (!subcommand || subcommand === "--help" || subcommand === "-h") {
+      printSkillsCommandHelp();
+      process.exit(0);
+    }
+
+    if (subcommand !== "get") {
+      console.error(`Error: Unknown skills subcommand \`${subcommand}\`.`);
+      printSkillsCommandHelp();
+      process.exit(2);
+    }
+
+    if (!topic || topic === "--help" || topic === "-h") {
+      printSkillsCommandHelp();
+      process.exit(0);
+    }
+
+    if (topic !== "core") {
+      console.error(`Error: Unknown skills topic \`${topic}\`.`);
+      printSkillsCommandHelp();
+      process.exit(2);
+    }
+
+    if (tail.includes("--help") || tail.includes("-h")) {
+      printSkillsCommandHelp("get core");
+      process.exit(0);
+    }
+
+    if (tail.length > 0) {
+      console.error("Error: `qagent skills get core` does not take additional arguments.");
+      process.exit(2);
+    }
+
+    try {
+      const { readBundledSkillCore } = await import("./skill-install.js");
+      const content = readBundledSkillCore();
+      process.stdout.write(content);
+      if (!content.endsWith("\n")) {
+        process.stdout.write("\n");
+      }
+      process.exit(0);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const exitCode = typeof error === "object" && error !== null && "exitCode" in error ? Number(error.exitCode) : 2;
+      console.error(`Error: ${message}`);
+      process.exit(Number.isInteger(exitCode) ? exitCode : 2);
+    }
+  }
+
+  const subcommand = argv[1];
+  const tail = argv.slice(2);
+
+  if (!subcommand || subcommand === "--help" || subcommand === "-h") {
+    printSkillCommandHelp();
+    process.exit(0);
+  }
+
+  if (subcommand === "install") {
+    if (tail.includes("--help") || tail.includes("-h")) {
+      printSkillCommandHelp("install");
+      process.exit(0);
+    }
+
+    let force = false;
+    let dryRun = false;
+
+    for (const token of tail) {
+      if (token === "--force") {
+        force = true;
+        continue;
+      }
+
+      if (token === "--dry-run") {
+        dryRun = true;
+        continue;
+      }
+
+      console.error(`Error: Unknown option or argument for \`qagent skill install\`: ${token}`);
+      process.exit(2);
+    }
+
+    try {
+      const { installSkill } = await import("./skill-install.js");
+      const result = installSkill({ force, dryRun });
+      console.log(result.message);
+      process.exit(result.exitCode);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const exitCode = typeof error === "object" && error !== null && "exitCode" in error ? Number(error.exitCode) : 2;
+      console.error(`Error: ${message}`);
+      process.exit(Number.isInteger(exitCode) ? exitCode : 2);
+    }
+  }
+
+  if (subcommand === "uninstall") {
+    if (tail.includes("--help") || tail.includes("-h")) {
+      printSkillCommandHelp("uninstall");
+      process.exit(0);
+    }
+
+    if (tail.length > 0) {
+      console.error(`Error: \`qagent skill uninstall\` does not take additional arguments.`);
+      process.exit(2);
+    }
+
+    const { uninstallSkill } = await import("./skill-install.js");
+    const result = uninstallSkill();
+    console.log(result.message);
+    process.exit(result.exitCode);
+  }
+
+  if (subcommand === "path") {
+    if (tail.includes("--help") || tail.includes("-h")) {
+      printSkillCommandHelp("path");
+      process.exit(0);
+    }
+
+    if (tail.length > 0) {
+      console.error(`Error: \`qagent skill path\` does not take additional arguments.`);
+      process.exit(2);
+    }
+
+    const { resolveSkillPaths } = await import("./skill-install.js");
+    console.log(resolveSkillPaths().destinationPath);
+    process.exit(0);
+  }
+
+  console.error(`Error: Unknown skill subcommand \`${subcommand}\`.`);
+  printSkillCommandHelp();
+  process.exit(2);
+}
+
 function printSummaryTable(suite: SuiteResult): void {
   console.log("\n" + "=".repeat(70));
   console.log(" QAgent Summary");
@@ -65,6 +264,12 @@ cli.command("doctor", "Check that all dependencies are installed").action(async 
   const ok = runDoctor();
   process.exit(ok ? 0 : 1);
 });
+
+// ── skill ─────────────────────────────────────────────────────────────
+cli.command("skill install", "Install the QAgent Claude Code skill into the user's Claude config directory");
+cli.command("skill uninstall", "Remove the installed QAgent skill");
+cli.command("skill path", "Print the resolved install path without installing anything");
+cli.command("skills get core", "Print the runtime QAgent assistant workflow content");
 
 // ── run (default) ─────────────────────────────────────────────────────
 cli
@@ -210,7 +415,7 @@ cli
   });
 
 cli.help();
-cli.version("0.0.0");
+cli.version("0.2.0");
 
 const preparseError = findPreparseNumericOptionError(process.argv.slice(2));
 if (preparseError) {
@@ -218,4 +423,5 @@ if (preparseError) {
   process.exit(2);
 }
 
+await maybeRunBuiltinMetaCommand(process.argv.slice(2));
 cli.parse();

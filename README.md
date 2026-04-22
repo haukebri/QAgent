@@ -25,6 +25,34 @@ qagent --url https://github.com/haukebri/QAgent --goal "I can see how qagent can
 
 That is enough to prove the full loop works without needing a local app first.
 
+## Claude Code Skill
+
+QAgent also ships a Claude Code skill so new Claude sessions can auto-trigger on requests like "verify the login flow" or "smoke test this app."
+
+If you want the ecosystem-native install flow, use the open skills CLI:
+
+```bash
+npx skills add haukebri/QAgent --skill qagent -g -a claude-code
+```
+
+That installs the skill directly from this repository in the format `skills` expects.
+
+```bash
+npm install -g @qagent/cli
+qagent skill install
+```
+
+That installs a small discovery stub into your Claude config directory without making you hunt for `~/.claude` yourself.
+The stub tells the assistant to load the current workflow text from the installed CLI with `qagent skills get core`, which keeps the instructions aligned with the QAgent version you actually have.
+
+For cleanup or inspection:
+
+```bash
+qagent skill uninstall
+qagent skill path
+qagent skills get core
+```
+
 ## Tell Your AI
 
 The current best UX for tools like this is to tell your coding agent exactly what to do.
@@ -191,6 +219,14 @@ qagent --headed
 
 # Verify the local machine is ready
 qagent doctor
+
+# Install or remove the Claude Code skill
+qagent skill install
+qagent skill uninstall
+qagent skill path
+
+# Print the runtime assistant workflow content
+qagent skills get core
 ```
 
 ## CLI Options
@@ -224,6 +260,7 @@ qagent doctor
 - Chrome installed for `agent-browser` via `agent-browser install`
 
 `qagent doctor` checks Node, `claude`, `agent-browser`, and does a real headless browser startup check.
+It also tells you whether the bundled Claude Code skill stub is installed and up to date.
 
 ## Output
 

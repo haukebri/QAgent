@@ -29,6 +29,9 @@ The core product bet is that many UI checks are easier to describe in prose than
 
 - CLI run command via `qagent`
 - `qagent doctor`
+- `qagent skill install`, `qagent skill uninstall`, and `qagent skill path`
+- `qagent skills get core`
+- repository-native skill install via `npx skills add <repo> --skill qagent`
 - one-off runs with `--goal`
 - multi-goal runs via `goals.json`
 - optional parallel execution with `--parallel`
@@ -92,6 +95,10 @@ qagent --goals goals.json               # explicit goals file
 qagent --parallel                       # opt into parallel multi-goal runs
 qagent --headed                         # visible browser window
 qagent doctor                           # verify local dependencies
+qagent skill install                    # install the bundled Claude Code skill
+qagent skill uninstall                  # remove the installed Claude Code skill
+qagent skill path                       # print the resolved Claude skill path
+qagent skills get core                  # print the runtime assistant workflow text
 qagent --version
 ```
 
@@ -305,6 +312,7 @@ Current checks:
 - `claude` in `PATH`
 - `agent-browser` in `PATH`
 - a real headless `agent-browser open about:blank` launch
+- bundled Claude Code skill install status
 
 This command should stay lightweight and fast.
 
@@ -312,7 +320,23 @@ If the browser-launch check fails, the likely next step is `agent-browser instal
 
 ---
 
-## 13. Non-Goals
+## 13. Claude Code Skill Distribution
+
+QAgent also ships a Claude Code skill as a secondary distribution surface.
+
+- the repo-native skill lives at `skills/qagent/SKILL.md`
+- the runtime workflow content lives at `skills/qagent/core.md`
+- `qagent skill install` copies the stub into the user's Claude config directory
+- `qagent skills get core` prints the current workflow content from the installed CLI
+- `npx skills add <repo> --skill qagent` can install the same skill directly from the Git repository
+- `.claude-plugin/marketplace.json` advertises the skill to Claude-compatible tooling
+- installation is explicit, never automatic on package install
+- the stub keeps the install stable while the runtime content stays aligned with the installed QAgent version
+- the skill helps new Claude Code sessions route prose QA requests toward QAgent
+
+---
+
+## 14. Non-Goals
 
 Keep these out unless the product direction changes:
 
@@ -325,7 +349,7 @@ Keep these out unless the product direction changes:
 
 ---
 
-## 14. Open Questions
+## 15. Open Questions
 
 - Should `doctor` also verify Chrome availability more directly?
 - Should skills descriptions stay as a free-form text file, or later become structured?

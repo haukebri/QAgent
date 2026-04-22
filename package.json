@@ -1,6 +1,6 @@
 {
   "name": "@qagent/cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "End-to-end tests from prose goals. Drives Claude Code + agent-browser and records evidence.",
   "keywords": [
     "e2e",
@@ -31,6 +31,7 @@
   },
   "files": [
     "dist",
+    "skills",
     "README.md",
     "LICENSE"
   ],

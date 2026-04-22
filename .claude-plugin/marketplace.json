@@ -1,0 +1,19 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "qagent",
+  "description": "Prose-driven end-to-end QA for live web apps",
+  "owner": {
+    "name": "Hauke Brinkmann",
+    "email": "haukebr@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "qagent",
+      "description": "Runs prose-driven browser QA checks with pass, fail, or blocked verdicts and screenshot evidence",
+      "source": "./",
+      "strict": false,
+      "skills": ["./skills/qagent"],
+      "category": "development"
+    }
+  ]
+}

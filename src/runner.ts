@@ -170,105 +170,82 @@ export async function runGoal(opts: {
   basicAuth?: { username: string; password: string };
   timeout?: number;
   headed?: boolean;
-  retries?: number;
 }): Promise<RunResult> {
-  const maxAttempts = (opts.retries ?? 0) + 1;
+  const runDir = createRunDir(opts.goal);
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    if (attempt > 1) {
-      console.log(`[QAgent] Retry ${attempt - 1}/${opts.retries} for blocked goal...`);
-    }
+  const resultPath = path.resolve(runDir, "result.json");
+  const screenshotDir = path.resolve(runDir);
+  const logPath = path.resolve(runDir, "claude-session.log");
 
-    const runDir = createRunDir(opts.goal);
-    const resultPath = path.resolve(runDir, "result.json");
-    const screenshotDir = path.resolve(runDir);
-    const logPath = path.resolve(runDir, "claude-session.log");
-
-    // Pre-start agent-browser session: set credentials + verify URL is reachable
-    let browserSession;
-    try {
-      console.log("[QAgent] Starting browser session...");
-      browserSession = startBrowserSession({
-        url: opts.url,
-        basicAuth: opts.basicAuth,
-        headed: opts.headed,
-      });
-      console.log(`[QAgent] Browser ready (session: ${browserSession.sessionName})`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const runResult: RunResult = { status: "blocked", summary: `Browser pre-start failed: ${message}`, exitCode: 2 };
-      if (attempt < maxAttempts) continue;
-      return runResult;
-    }
-
-    const prompt = buildPrompt({
+  // Pre-start agent-browser session: set credentials + verify URL is reachable
+  let browserSession;
+  try {
+    console.log("[QAgent] Starting browser session...");
+    browserSession = startBrowserSession({
       url: opts.url,
-      goal: opts.goal,
-      credentialsJson: opts.credentialsJson ?? "None provided.",
-      skillsDescription: opts.skillsDescription ?? "None provided.",
-      resultPath,
-      screenshotDir,
+      basicAuth: opts.basicAuth,
+      headed: opts.headed,
     });
-
-    const timeout = opts.timeout ?? 180_000;
-
-    try {
-      const session = await runClaudeSession({
-        prompt,
-        timeout,
-        logPath,
-        sessionName: browserSession.sessionName,
-      });
-
-      if (session.kind === "launch-error") {
-        return { status: "blocked", summary: formatLaunchError(session.error), exitCode: 2 };
-      }
-
-      if (session.kind === "timeout") {
-        const runResult: RunResult = { status: "blocked", summary: `Run hit the wall-clock timeout after ${timeout}ms`, exitCode: 1 };
-        if (attempt < maxAttempts) continue;
-        return runResult;
-      }
-
-      if (session.code !== 0) {
-        const runResult: RunResult = { status: "blocked", summary: "Claude Code crashed", exitCode: 3 };
-        if (attempt < maxAttempts) continue;
-        return runResult;
-      }
-
-      if (!existsSync(resultPath)) {
-        const runResult: RunResult = { status: "blocked", summary: "Agent did not produce a valid result file", exitCode: 1 };
-        if (attempt < maxAttempts) continue;
-        return runResult;
-      }
-
-      let result;
-      try {
-        result = readResult(resultPath);
-      } catch {
-        const runResult: RunResult = { status: "blocked", summary: "Agent did not produce a valid result file", exitCode: 1 };
-        if (attempt < maxAttempts) continue;
-        return runResult;
-      }
-
-      // Only retry on "blocked", not on "fail" (fail = real app bug, retrying won't help)
-      if (result.status === "blocked" && attempt < maxAttempts) {
-        console.log(`[QAgent] Goal blocked: ${result.summary}`);
-        continue;
-      }
-
-      return {
-        status: result.status,
-        summary: result.summary,
-        exitCode: result.status === "pass" ? 0 : 1,
-      };
-    } finally {
-      closeBrowserSession(browserSession);
-    }
+    console.log(`[QAgent] Browser ready (session: ${browserSession.sessionName})`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { status: "blocked", summary: `Browser pre-start failed: ${message}`, exitCode: 2 };
   }
 
-  // Should never reach here, but TypeScript needs it
-  return { status: "blocked", summary: "All retry attempts exhausted", exitCode: 1 };
+  const prompt = buildPrompt({
+    url: opts.url,
+    goal: opts.goal,
+    credentialsJson: opts.credentialsJson ?? "None provided.",
+    skillsDescription: opts.skillsDescription ?? "None provided.",
+    resultPath,
+    screenshotDir,
+  });
+
+  const timeout = opts.timeout ?? 180_000;
+
+  try {
+    const session = await runClaudeSession({
+      prompt,
+      timeout,
+      logPath,
+      sessionName: browserSession.sessionName,
+    });
+
+    if (session.kind === "launch-error") {
+      return { status: "blocked", summary: formatLaunchError(session.error), exitCode: 2 };
+    }
+
+    if (session.kind === "timeout") {
+      return {
+        status: "blocked",
+        summary: `Run hit the wall-clock timeout after ${timeout}ms`,
+        exitCode: 1,
+      };
+    }
+
+    if (session.code !== 0) {
+      return { status: "blocked", summary: "Claude Code crashed", exitCode: 3 };
+    }
+
+    if (!existsSync(resultPath)) {
+      return { status: "blocked", summary: "Agent did not produce a valid result file", exitCode: 1 };
+    }
+
+    let result;
+    try {
+      result = readResult(resultPath);
+    } catch {
+      return { status: "blocked", summary: "Agent did not produce a valid result file", exitCode: 1 };
+    }
+
+    return {
+      status: result.status,
+      summary: result.summary,
+      exitCode: result.status === "pass" ? 0 : 1,
+    };
+  } finally {
+    closeBrowserSession(browserSession);
+  }
 }
 
 export interface GoalResult {
@@ -298,7 +275,6 @@ async function runGoalEntry(
     basicAuth?: { username: string; password: string };
     timeout?: number;
     headed?: boolean;
-    retries?: number;
   },
 ): Promise<GoalResult> {
   console.log(`\n[QAgent] Goal ${index + 1}/${total}: ${goalDef.name}`);
@@ -312,7 +288,6 @@ async function runGoalEntry(
     basicAuth: opts.basicAuth,
     timeout: opts.timeout,
     headed: opts.headed,
-    retries: opts.retries,
   });
 
   const icon = result.status === "pass" ? "PASS" : result.status === "fail" ? "FAIL" : "BLOCKED";
@@ -357,7 +332,6 @@ export async function runSuite(opts: {
   timeout?: number;
   parallel?: boolean;
   headed?: boolean;
-  retries?: number;
 }): Promise<SuiteResult> {
   const shared = {
     url: opts.url,
@@ -366,7 +340,6 @@ export async function runSuite(opts: {
     basicAuth: opts.basicAuth,
     timeout: opts.timeout,
     headed: opts.headed,
-    retries: opts.retries,
   };
 
   if (opts.parallel) {

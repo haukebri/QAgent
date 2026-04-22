@@ -1,45 +1,65 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code when working with code in this repository.
 
 ## Project
 
-QAgent — a CLI that runs prose-written E2E goals against a web app using Claude Code + `agent-browser`, records screenshot evidence, and optionally promotes passing runs to Playwright tests. Pre-alpha; `docs/DESIGN.md` is the source of truth.
+QAgent is a CLI for prose-driven end-to-end QA against live web apps. It uses Claude Code plus `agent-browser`, records screenshot evidence, and returns pass, fail, or blocked verdicts. There is **no Playwright generation in this tool**.
+
+`docs/DESIGN.md` is the source of truth for the current product direction.
 
 ## Commands
 
 ```bash
-npm run build        # tsc → dist/
-npm run dev          # tsx src/cli.ts (run CLI without building)
+npm run build        # tsc -> dist/
+npm run dev          # tsx src/cli.ts
+npm run test         # build + node:test suite
 npm run typecheck    # tsc --noEmit
 ```
 
-No test framework is set up yet.
-
 ## Tech Stack
 
-- **Runtime:** Node.js ≥ 20, ESM (`"type": "module"`)
-- **Language:** TypeScript (strict, `noUncheckedIndexedAccess`), target ES2022, module NodeNext
-- **CLI framework:** cac
-- **Validation:** zod (for config/goals/credentials schemas)
-- **Build:** plain `tsc` → `dist/`
-- **Dev runner:** tsx
+- Runtime: Node.js >= 20, ESM (`"type": "module"`)
+- Language: TypeScript (strict, `noUncheckedIndexedAccess`)
+- CLI framework: cac
+- Validation: zod
+- Tests: Node's built-in test runner
+- Build: plain `tsc` -> `dist/`
+- Dev runner: tsx
 
 ## Architecture
 
-The CLI (`src/cli.ts` → `dist/cli.js`) exposes two main commands:
+The CLI (`src/cli.ts` -> `dist/cli.js`) currently exposes:
 
-1. **`qagent init`** — scaffolds config (`qagent.config.json`), goals file, prompt template, credentials placeholder, and installs Playwright if missing.
-2. **`qagent run`** — for each goal sequentially: renders a prompt template with goal context, spawns `claude -p "<prompt>" --allowed-tools "Bash(agent-browser:*) Read Write"`, then reads the resulting `result.json` for pass/fail/blocked verdict. Optionally generates Playwright specs on pass (`--record`).
+1. `qagent` as the default run command
+2. `qagent doctor` to verify local dependencies
 
-Key design decisions:
-- QAgent is a **wrapper**, not a runtime — it spawns Claude Code as a subprocess.
-- Each goal runs in a **fresh browser context** with no shared state.
-- The prompt template at `.qagent/prompt.md` is user-editable; substitution uses `{{url}}`, `{{goal}}`, `{{resultPath}}`, etc.
-- Exit codes: 0 = all pass, 1 = fail/blocked, 2 = setup error, 3 = Claude crash.
+Run flow:
+
+1. Load `qagent.config.json`
+2. Resolve goals, credentials, and optional skills-description files
+3. For each goal, start a fresh `agent-browser` session before spawning Claude
+4. Apply HTTP basic auth if configured, then open the target URL
+5. Spawn Claude with a built-in prompt and restricted `agent-browser` access
+6. Read `result.json` and classify the goal as `pass`, `fail`, or `blocked`
+
+Important design decisions:
+
+- QAgent is a wrapper, not its own runtime
+- Browser sessions are pre-started outside the prompt
+- Each goal runs in an isolated browser session
+- Parallel execution is supported via `--parallel`
+- Exit codes: `0` all passed, `1` app/test failures or blocked runs, `2` setup errors, `3` Claude crash
 
 ## Key Files
 
-- `docs/DESIGN.md` — full design doc (architecture, CLI surface, config schemas, prompt template, build plan). **Read this first** for any implementation work.
-- `docs/milestones/` — milestone planning docs
-- `docs/tasks/` — task tracking docs
+- `docs/DESIGN.md` — current product design
+- `src/cli.ts` — CLI entrypoint
+- `src/runner.ts` — goal/suite orchestration
+- `src/browser-session.ts` — deterministic browser startup
+- `src/config.ts` — config loading
+- `src/credentials.ts` — credential loading + env interpolation
+- `src/skills.ts` — optional skills-description loading
+- `src/goals.ts` — goals-file validation
+- `src/prompt.ts` — built-in prompt
+- `test/cli.test.mjs` — process-level regression tests

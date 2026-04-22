@@ -34,6 +34,7 @@ const prompt = promptIndex >= 0 ? process.argv[promptIndex + 1] ?? "" : "";
 const mode = process.env.QAGENT_CLAUDE_MODE ?? "pass";
 const stdoutText = process.env.QAGENT_CLAUDE_STDOUT ?? "";
 const stderrText = process.env.QAGENT_CLAUDE_STDERR ?? "";
+const capturePromptPath = process.env.QAGENT_CAPTURE_PROMPT ?? "";
 const delayMs = Number.parseInt(process.env.QAGENT_CLAUDE_DELAY_MS ?? "0", 10);
 
 if (stdoutText) {
@@ -42,6 +43,10 @@ if (stdoutText) {
 
 if (stderrText) {
   process.stderr.write(stderrText);
+}
+
+if (capturePromptPath) {
+  writeFileSync(capturePromptPath, prompt);
 }
 
 if (Number.isFinite(delayMs) && delayMs > 0) {
@@ -99,6 +104,41 @@ node "${helperPath}" %*
   return binDir;
 }
 
+async function createAgentBrowserStub(tempDir) {
+  const binDir = path.join(tempDir, "bin");
+  await mkdir(binDir, { recursive: true });
+
+  const unixWrapper = path.join(binDir, "agent-browser");
+  await writeFile(
+    unixWrapper,
+    `#!/bin/sh
+if [ "$QAGENT_AGENT_BROWSER_MODE" = "fail" ]; then
+  echo "\${QAGENT_AGENT_BROWSER_STDERR:-agent-browser failed}" >&2
+  exit "\${QAGENT_AGENT_BROWSER_EXIT_CODE:-23}"
+fi
+exit 0
+`,
+    "utf8",
+  );
+  await chmod(unixWrapper, 0o755);
+
+  const windowsWrapper = path.join(binDir, "agent-browser.cmd");
+  await writeFile(
+    windowsWrapper,
+    `@echo off
+if "%QAGENT_AGENT_BROWSER_MODE%"=="fail" (
+  1>&2 echo %QAGENT_AGENT_BROWSER_STDERR%
+  if "%QAGENT_AGENT_BROWSER_EXIT_CODE%"=="" exit /b 23
+  exit /b %QAGENT_AGENT_BROWSER_EXIT_CODE%
+)
+exit /b 0
+`,
+    "utf8",
+  );
+
+  return binDir;
+}
+
 function runCli({ args, cwd, env }) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cliPath, ...args], {
@@ -134,6 +174,7 @@ async function getRunDirs(tempDir) {
 test("one-off run succeeds and writes result plus session log", async (t) => {
   const tempDir = await makeTempDir(t);
   const binDir = await createClaudeStub(tempDir);
+  await createAgentBrowserStub(tempDir);
 
   const result = await runCli({
     cwd: tempDir,
@@ -164,9 +205,248 @@ test("one-off run succeeds and writes result plus session log", async (t) => {
   assert.match(logText, /stub stderr/);
 });
 
+test("one-off run can load baseUrl and defaults from qagent.config.json in the project root", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const binDir = await createClaudeStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+  const capturedPromptPath = path.join(tempDir, "captured-prompt.txt");
+
+  await mkdir(path.join(tempDir, ".qagent"), { recursive: true });
+  await writeFile(
+    path.join(tempDir, "qagent.config.json"),
+    JSON.stringify({
+      baseUrl: "https://config.example.com",
+      credentialsFile: ".qagent/test-credentials.json",
+      timeoutMs: 9876,
+    }),
+    "utf8",
+  );
+  await writeFile(
+    path.join(tempDir, ".qagent", "test-credentials.json"),
+    JSON.stringify({
+      basicAuth: {
+        username: "staging",
+        password: "secret-basic",
+      },
+      users: [
+        {
+          label: "default",
+          email: "user@example.com",
+          password: "secret-user",
+        },
+      ],
+    }),
+    "utf8",
+  );
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["--goal", "I can see the dashboard"],
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      QAGENT_CAPTURE_PROMPT: capturedPromptPath,
+    },
+  });
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /\[QAgent\] PASS: Stubbed pass/);
+
+  const promptText = await readFile(capturedPromptPath, "utf8");
+  assert.match(promptText, /TARGET URL: https:\/\/config\.example\.com/);
+  assert.match(promptText, /TEST CREDENTIALS \(use as needed\):/);
+  assert.match(promptText, /"username": "staging"/);
+  assert.match(promptText, /"email": "user@example\.com"/);
+});
+
+test("skills description from config is included in the prompt", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const binDir = await createClaudeStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+  const capturedPromptPath = path.join(tempDir, "skills-prompt.txt");
+
+  await writeFile(
+    path.join(tempDir, "qagent.config.json"),
+    JSON.stringify({
+      baseUrl: "https://config.example.com",
+      skillsFile: "skills.md",
+    }),
+    "utf8",
+  );
+  await writeFile(
+    path.join(tempDir, "skills.md"),
+    `- This is a B2B dashboard app.
+- The main post-login landing page is called "Overview".
+- "Workspace" means the currently selected customer account.
+`,
+    "utf8",
+  );
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["--goal", "I can see the dashboard overview"],
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      QAGENT_CAPTURE_PROMPT: capturedPromptPath,
+    },
+  });
+
+  assert.equal(result.code, 0);
+
+  const promptText = await readFile(capturedPromptPath, "utf8");
+  assert.match(promptText, /SKILLS DESCRIPTION:/);
+  assert.match(promptText, /This is a B2B dashboard app/);
+  assert.match(promptText, /"Workspace" means the currently selected customer account/);
+});
+
+test("one-off run can load config from an explicit --config path", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const binDir = await createClaudeStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+  const customConfigPath = path.join(tempDir, "fixtures", "custom.qagent.json");
+  const capturedPromptPath = path.join(tempDir, "explicit-config-prompt.txt");
+
+  await mkdir(path.dirname(customConfigPath), { recursive: true });
+  await writeFile(
+    customConfigPath,
+    JSON.stringify({
+      baseUrl: "https://explicit.example.com",
+    }),
+    "utf8",
+  );
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["--config", customConfigPath, "--goal", "I can log in"],
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      QAGENT_CAPTURE_PROMPT: capturedPromptPath,
+    },
+  });
+
+  assert.equal(result.code, 0);
+
+  const promptText = await readFile(capturedPromptPath, "utf8");
+  assert.match(promptText, /TARGET URL: https:\/\/explicit\.example\.com/);
+});
+
+test("explicit --credentials overrides credentialsFile from config", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const binDir = await createClaudeStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+  const capturedPromptPath = path.join(tempDir, "override-credentials-prompt.txt");
+
+  await mkdir(path.join(tempDir, ".qagent"), { recursive: true });
+  await writeFile(
+    path.join(tempDir, "qagent.config.json"),
+    JSON.stringify({
+      baseUrl: "https://config.example.com",
+      credentialsFile: ".qagent/default-credentials.json",
+    }),
+    "utf8",
+  );
+  await writeFile(
+    path.join(tempDir, ".qagent", "default-credentials.json"),
+    JSON.stringify({
+      users: [
+        {
+          label: "default",
+          email: "default@example.com",
+          password: "default-password",
+        },
+      ],
+    }),
+    "utf8",
+  );
+  await writeFile(
+    path.join(tempDir, ".qagent", "override-credentials.json"),
+    JSON.stringify({
+      users: [
+        {
+          label: "admin",
+          username: "admin-user",
+          password: "override-password",
+        },
+      ],
+    }),
+    "utf8",
+  );
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["--goal", "I can log in", "--credentials", ".qagent/override-credentials.json"],
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      QAGENT_CAPTURE_PROMPT: capturedPromptPath,
+    },
+  });
+
+  assert.equal(result.code, 0);
+
+  const promptText = await readFile(capturedPromptPath, "utf8");
+  assert.match(promptText, /"username": "admin-user"/);
+  assert.doesNotMatch(promptText, /default@example\.com/);
+});
+
+test("credentials support env var interpolation", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const binDir = await createClaudeStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+  const capturedPromptPath = path.join(tempDir, "env-credentials-prompt.txt");
+
+  await mkdir(path.join(tempDir, ".qagent"), { recursive: true });
+  await writeFile(
+    path.join(tempDir, "qagent.config.json"),
+    JSON.stringify({
+      baseUrl: "https://config.example.com",
+      credentialsFile: ".qagent/test-credentials.json",
+    }),
+    "utf8",
+  );
+  await writeFile(
+    path.join(tempDir, ".qagent", "test-credentials.json"),
+    JSON.stringify({
+      basicAuth: {
+        username: "staging",
+        password: "${BASIC_AUTH_PASSWORD}",
+      },
+      users: [
+        {
+          label: "default",
+          email: "user@example.com",
+          password: "${TEST_USER_PASSWORD}",
+        },
+      ],
+    }),
+    "utf8",
+  );
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["--goal", "I can log in"],
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      QAGENT_CAPTURE_PROMPT: capturedPromptPath,
+      BASIC_AUTH_PASSWORD: "interpolated-basic-password",
+      TEST_USER_PASSWORD: "interpolated-user-password",
+    },
+  });
+
+  assert.equal(result.code, 0);
+
+  const promptText = await readFile(capturedPromptPath, "utf8");
+  assert.match(promptText, /interpolated-basic-password/);
+  assert.match(promptText, /interpolated-user-password/);
+});
+
 test("a second run with the same goal gets a fresh directory instead of reusing stale artifacts", async (t) => {
   const tempDir = await makeTempDir(t);
   const binDir = await createClaudeStub(tempDir);
+  await createAgentBrowserStub(tempDir);
   const envBase = {
     ...process.env,
     PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
@@ -198,13 +478,14 @@ test("a second run with the same goal gets a fresh directory instead of reusing 
 
 test("missing claude returns a setup error instead of crashing the process", async (t) => {
   const tempDir = await makeTempDir(t);
+  const binDir = await createAgentBrowserStub(tempDir);
 
   const result = await runCli({
     cwd: tempDir,
     args: ["--url", "https://example.com", "--goal", "Goal"],
     env: {
       ...process.env,
-      PATH: "/usr/bin:/bin",
+      PATH: `${binDir}${path.delimiter}/usr/bin:/bin`,
     },
   });
 
@@ -220,6 +501,7 @@ test("missing claude returns a setup error instead of crashing the process", asy
 test("timeout is classified as blocked instead of a Claude crash", async (t) => {
   const tempDir = await makeTempDir(t);
   const binDir = await createClaudeStub(tempDir);
+  await createAgentBrowserStub(tempDir);
 
   const result = await runCli({
     cwd: tempDir,
@@ -240,17 +522,122 @@ test("timeout is classified as blocked instead of a Claude crash", async (t) => 
   assert.match(logText, /Timeout reached after 50ms; stopping Claude/);
 });
 
+test("suite mode preserves Claude crash exit code", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const binDir = await createClaudeStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+
+  await writeFile(
+    path.join(tempDir, "goals.json"),
+    JSON.stringify([{ name: "login", goal: "I can log in" }]),
+    "utf8",
+  );
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["--url", "https://example.com", "--goals", "goals.json"],
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      QAGENT_CLAUDE_MODE: "crash",
+    },
+  });
+
+  assert.equal(result.code, 3);
+  assert.match(result.stdout, /Claude Code crashed/);
+});
+
+test("suite mode preserves setup error exit code", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const binDir = await createClaudeStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+
+  await writeFile(
+    path.join(tempDir, "goals.json"),
+    JSON.stringify([{ name: "login", goal: "I can log in" }]),
+    "utf8",
+  );
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["--url", "https://example.com", "--goals", "goals.json"],
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      QAGENT_AGENT_BROWSER_MODE: "fail",
+      QAGENT_AGENT_BROWSER_STDERR: "stub browser failure",
+    },
+  });
+
+  assert.equal(result.code, 2);
+  assert.match(result.stdout, /Browser pre-start failed/);
+});
+
+test("invalid qagent.config.json fails fast as a setup error", async (t) => {
+  const tempDir = await makeTempDir(t);
+
+  await writeFile(
+    path.join(tempDir, "qagent.config.json"),
+    JSON.stringify({
+      baseUrl: "not-a-url",
+    }),
+    "utf8",
+  );
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["--goal", "Goal"],
+    env: {
+      ...process.env,
+      PATH: "/usr/bin:/bin",
+    },
+  });
+
+  assert.equal(result.code, 2);
+  assert.match(result.stderr, /Invalid QAgent config/);
+  assert.equal(result.stdout, "");
+});
+
+test("invalid qagent credentials file fails fast as a setup error", async (t) => {
+  const tempDir = await makeTempDir(t);
+
+  await mkdir(path.join(tempDir, ".qagent"), { recursive: true });
+  await writeFile(
+    path.join(tempDir, "qagent.config.json"),
+    JSON.stringify({
+      baseUrl: "https://config.example.com",
+      credentialsFile: ".qagent/test-credentials.json",
+    }),
+    "utf8",
+  );
+  await writeFile(
+    path.join(tempDir, ".qagent", "test-credentials.json"),
+    JSON.stringify({
+      users: [
+        {
+          label: "broken-user",
+          password: "missing-identifier",
+        },
+      ],
+    }),
+    "utf8",
+  );
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["--goal", "Goal"],
+    env: {
+      ...process.env,
+      PATH: "/usr/bin:/bin",
+    },
+  });
+
+  assert.equal(result.code, 2);
+  assert.match(result.stderr, /Invalid QAgent credentials/);
+  assert.equal(result.stdout, "");
+});
+
 for (const scenario of [
-  {
-    name: "rejects a non-numeric --max-steps value",
-    args: ["--url", "https://example.com", "--goal", "Goal", "--max-steps", "abc"],
-    errorText: "Error: --max-steps must be a positive integer.",
-  },
-  {
-    name: "rejects a non-positive --max-steps value",
-    args: ["--url", "https://example.com", "--goal", "Goal", "--max-steps", "0"],
-    errorText: "Error: --max-steps must be a positive integer.",
-  },
   {
     name: "rejects a non-numeric --timeout value",
     args: ["--url", "https://example.com", "--goal", "Goal", "--timeout", "abc"],

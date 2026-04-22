@@ -1,11 +1,10 @@
 {
   "name": "@qagent/cli",
   "version": "0.0.0",
-  "description": "End-to-end tests from prose goals. Drives Claude Code + agent-browser, records evidence, can promote passing runs to Playwright tests.",
+  "description": "End-to-end tests from prose goals. Drives Claude Code + agent-browser and records evidence.",
   "keywords": [
     "e2e",
     "testing",
-    "playwright",
     "claude",
     "claude-code",
     "ai",

@@ -251,6 +251,25 @@ qagent skill path
 qagent skills get core
 ```
 
+## Releasing
+
+When you are ready to publish a new version, use the release helper:
+
+```bash
+npm run release -- 0.2.1
+```
+
+You can also pass `patch`, `minor`, or `major` instead of an exact version.
+
+The script will:
+
+- require a clean git working tree
+- run `npm test`
+- prompt for `npm login` only if you are not already authenticated
+- run `npm version` to create the release commit and git tag
+- push the commit and tag to `origin`
+- run `npm publish`
+
 ## CLI Options
 
 | Flag | Default | Description |

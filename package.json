@@ -40,6 +40,7 @@
     "build": "tsc",
     "dev": "tsx src/cli.ts",
     "doctor": "tsx src/cli.ts doctor",
+    "release": "bash scripts/release.sh",
     "test:prompt": "npm run build && node --test test/prompt.test.mjs",
     "test": "npm run build && node --test",
     "typecheck": "tsc --noEmit",

@@ -1,6 +1,6 @@
 # QAgent — Design
 
-A CLI that runs prose-written end-to-end goals against a live web app using Claude Code or Codex plus `agent-browser`, produces screenshot evidence, and returns a pass, fail, or blocked verdict.
+A CLI that runs prose-written end-to-end goals against a live `http` or `https` web app using Claude Code or Codex plus `agent-browser`, produces screenshot evidence, and returns a pass, fail, or blocked verdict.
 
 QAgent is intentionally narrow: it is a test runner wrapper around a coding-agent CLI, not a broader automation platform and not a Playwright generator.
 
@@ -35,11 +35,15 @@ The core product bet is that many UI checks are easier to describe in prose than
 - one-off runs with `--goal`
 - multi-goal runs via `goals.json`
 - optional parallel execution with `--parallel`
+- blocked-run retries via `--retries`
 - vendor selection via `--vendor claude|codex` (Claude default)
 - fresh browser session per goal
 - deterministic browser startup before the model begins
+- isolated temp execution directory per goal
+- filtered subprocess environments for vendor and browser processes
 - HTTP basic auth support
-- in-app login credentials passed to the model
+- in-app login credentials from `users` passed to the model
+- explicit env-var allowlisting for credentials interpolation via `--allow-credential-env`
 - optional project skills description passed to the model
 - screenshot evidence in per-run artifact directories
 - `result.json` per goal
@@ -66,11 +70,12 @@ qagent CLI (Node/TypeScript)
   ├─ resolves goals + credentials + optional skills description
   ├─ for each goal:
   │    ├─ mkdir .qagent/runs/<timestamp>-<goal>-<unique>/
+  │    ├─ mkdir isolated temp execution dir
   │    ├─ start agent-browser session
   │    ├─ apply HTTP basic auth (if configured)
   │    ├─ open the target URL before the agent starts
   │    ├─ render built-in prompt with goal context
-  │    ├─ spawn: selected vendor CLI with the built-in prompt
+  │    ├─ spawn: selected vendor CLI from the temp dir with filtered env
   │    ├─ the agent drives the already-open browser and writes result.json
   │    ├─ parent reads result.json and classifies the result
   │    └─ parent writes a vendor-specific session log for debugging
@@ -82,6 +87,7 @@ qagent CLI (Node/TypeScript)
 - basic auth is deterministic instead of left to the model
 - unreachable URLs fail before spending AI time
 - the agent starts from a real loaded page
+- HTTP basic auth stays out of the model prompt
 - this is a better fit for CI-style CLI behavior
 
 ---
@@ -93,6 +99,8 @@ qagent                                  # run all goals from config
 qagent --goal "..." --url "..."         # one-off run
 qagent --goals goals.json               # explicit goals file
 qagent --vendor codex                   # run with Codex instead of Claude
+qagent --retries 1                      # retry blocked runs once
+qagent --allow-credential-env FOO,BAR   # allow specific env vars in credentials templates
 qagent --parallel                       # opt into parallel multi-goal runs
 qagent --headed                         # visible browser window
 qagent doctor                           # verify local dependencies
@@ -107,7 +115,7 @@ qagent --version
 
 | Flag | Default | Purpose |
 | :--- | :--- | :--- |
-| `--url <url>` | from config `baseUrl` | Target URL |
+| `--url <url>` | from config `baseUrl` | Target URL (`http` or `https` only) |
 | `--goal "<text>"` | — | One-off goal text |
 | `--goals <path>` | config `goalsFile` | Path to goals file |
 | `--config <path>` | `./qagent.config.json` | Config file |
@@ -115,6 +123,8 @@ qagent --version
 | `--skills <path>` | config `skillsFile` | Skills-description file |
 | `--vendor <vendor>` | `claude` | Agent vendor (`claude` or `codex`) |
 | `--timeout <ms>` | `180000` | Wall-clock limit per goal |
+| `--retries <n>` | `0` | Retry blocked runs up to `n` additional times |
+| `--allow-credential-env <names>` | — | Comma-separated env var names allowed in credentials interpolation |
 | `--parallel` | false | Run multi-goal suites in parallel |
 | `--headed` | false | Run Chrome visibly for debugging |
 
@@ -151,7 +161,7 @@ Current config fields:
 - `skillsFile`
 - `timeoutMs`
 
-Config is validated on load. CLI flags override config values.
+Config is validated on load. `baseUrl` must use `http` or `https`. CLI flags override config values.
 
 ---
 
@@ -183,7 +193,7 @@ Default expectation: `goals.json` in the project root. Users can point elsewhere
 
 ## 7. Credentials File: `.qagent/test-credentials.json`
 
-Gitignored. Plain JSON. Rendered into the prompt for each goal.
+Gitignored. Plain JSON. The `users` section is rendered into the prompt for each goal; `basicAuth` is applied by QAgent before navigation and is not rendered into the prompt.
 
 ```json
 {
@@ -208,8 +218,9 @@ Gitignored. Plain JSON. Rendered into the prompt for each goal.
 
 Notes:
 
-- env-var interpolation is supported
+- env-var interpolation is supported, but only for names explicitly allowed with `--allow-credential-env`
 - `basicAuth` is applied before page load
+- `basicAuth` is not passed into the selected agent prompt
 - user credentials are still passed into the selected agent for in-app login steps
 
 ---
@@ -247,7 +258,7 @@ It includes:
 
 - target URL
 - goal text
-- test credentials
+- test credentials from `users`
 - optional skills description
 - run artifact paths
 - instructions for using `agent-browser`
@@ -259,6 +270,13 @@ The prompt should keep steering focused on:
 - taking screenshots after meaningful state changes
 - writing a valid `result.json`
 - treating project context as helpful guidance, not as evidence
+
+Vendor runtime boundaries:
+
+- each vendor runs from an isolated temp execution directory instead of the project root
+- subprocess environments are filtered rather than inheriting the full parent environment
+- Claude is launched in bare mode with only the needed browser/reporting tools
+- Codex is launched in `workspace-write` mode with access limited to the run artifacts and browser session directories
 
 ---
 
@@ -357,6 +375,6 @@ Keep these out unless the product direction changes:
 
 - Should `doctor` also verify Chrome availability more directly?
 - Should skills descriptions stay as a free-form text file, or later become structured?
-- Should we add retry policy for `blocked` runs?
+- Should retry policy later become more configurable than a flat `--retries <n>` count?
 - Do we want a user-editable prompt file later, or keep prompt design internal?
 - If a separate Playwright tool exists later, what artifact contract should it consume from QAgent?

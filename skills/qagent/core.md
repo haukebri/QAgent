@@ -1,6 +1,6 @@
 # QAgent
 
-QAgent is a CLI that runs prose-driven end-to-end browser QA checks against live web apps. It wraps Claude Code or Codex plus `agent-browser`, records screenshot evidence, and returns `pass`, `fail`, or `blocked` verdicts for each goal.
+QAgent is a CLI that runs prose-driven end-to-end browser QA checks against live `http` or `https` web apps. It wraps Claude Code or Codex plus `agent-browser`, records screenshot evidence, and returns `pass`, `fail`, or `blocked` verdicts for each goal.
 
 Your job when this skill activates: help the user run QAgent, draft goals in the right style, and interpret the results honestly.
 
@@ -21,6 +21,9 @@ qagent --url <url> --goal "<plain-English goal>"
 
 # optional vendor switch
 qagent --vendor codex --url <url> --goal "<plain-English goal>"
+
+# optional blocked-run retry
+qagent --url <url> --goal "<plain-English goal>" --retries 1
 ```
 
 Project mode:
@@ -36,6 +39,7 @@ qagent --goals <path> --url <url>
 ```
 
 Use `--parallel` only if the user explicitly asks for parallel execution.
+If the credentials file contains `${ENV_VAR}` placeholders, add `--allow-credential-env NAME1,NAME2` with the exact variable names that should be expanded.
 
 ## Writing Goals
 
@@ -62,9 +66,10 @@ When the user describes a flow, draft a goal in this style before saving or runn
    - `result.json` for the verdict
    - screenshots for evidence
    - `claude-session.log` or `codex-session.log` for the inner session transcript
-4. Report each goal's verdict with a short summary and the artifact paths.
-5. On `blocked`, inspect the vendor session log to diagnose setup issues, auth problems, missing data, or browser failures.
-6. On `fail`, summarize what the app did versus what the goal expected, grounded in the captured evidence.
+4. `basicAuth` is applied before navigation and is not passed into the model prompt. `users` credentials are passed to the testing agent for in-app login steps.
+5. Report each goal's verdict with a short summary and the artifact paths.
+6. On `blocked`, inspect the vendor session log to diagnose setup issues, auth problems, missing data, or browser failures.
+7. On `fail`, summarize what the app did versus what the goal expected, grounded in the captured evidence.
 
 ## Exit Codes
 
@@ -84,5 +89,6 @@ Treat `skills.md` as context, not proof. QAgent still has to verify behavior liv
 - Never fabricate results. Always run `qagent` and report what it actually returned.
 - Never generate Playwright code. QAgent does not produce Playwright output.
 - Goals must describe user-visible outcomes, not selectors or implementation details.
+- Target URLs must use `http` or `https`.
 - Each goal runs in a fresh browser session. Do not assume shared login state across goals.
 - Parallel execution is opt-in only. Never pass `--parallel` unless the user explicitly asks.

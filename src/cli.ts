@@ -5,27 +5,33 @@ import { loadConfig, resolveConfigPath } from "./config.js";
 import { formatCredentialsForPrompt, loadCredentials } from "./credentials.js";
 import { formatSkillsDescriptionForPrompt, loadSkillsDescription } from "./skills.js";
 import type { SuiteResult } from "./runner.js";
+import { assertHttpUrl } from "./url.js";
 import { parseVendorOption, type Vendor } from "./vendor.js";
 
 const cli = cac("qagent");
 
 function findPreparseNumericOptionError(argv: string[]): string | null {
+  const rules = new Map([
+    ["--timeout", "Error: --timeout must be a positive integer."],
+    ["--retries", "Error: --retries must be a non-negative integer."],
+  ]);
+
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
-    if (token !== "--timeout") {
+    if (!token || !rules.has(token)) {
       continue;
     }
 
     const value = argv[index + 1];
     if (value && /^-\d+$/.test(value)) {
-      return `Error: ${token} must be a positive integer.`;
+      return rules.get(token) ?? null;
     }
   }
 
   return null;
 }
 
-function parsePositiveIntegerOption(value: unknown): number | null | undefined {
+function parseIntegerOption(value: unknown, opts?: { allowZero?: boolean }): number | null | undefined {
   if (typeof value !== "string" && typeof value !== "number") {
     return undefined;
   }
@@ -36,11 +42,37 @@ function parsePositiveIntegerOption(value: unknown): number | null | undefined {
   }
 
   const parsed = Number.parseInt(normalized, 10);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+  const minimum = opts?.allowZero ? 0 : 1;
+  if (!Number.isSafeInteger(parsed) || parsed < minimum) {
     return null;
   }
 
   return parsed;
+}
+
+function parseAllowedCredentialEnvOption(value: unknown): Set<string> | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const rawValues = Array.isArray(value) ? value : [value];
+  const names: string[] = [];
+
+  for (const rawValue of rawValues) {
+    if (typeof rawValue !== "string") {
+      return null;
+    }
+
+    for (const token of rawValue.split(",")) {
+      const trimmed = token.trim();
+      if (!trimmed) {
+        return null;
+      }
+      names.push(trimmed);
+    }
+  }
+
+  return new Set(names);
 }
 
 function resolveVendorOption(optionValue: unknown, configVendor?: Vendor): Vendor {
@@ -312,6 +344,7 @@ cli
   .option("--parallel", "Run goals in parallel (only with --goals)")
   .option("--headed", "Run Chrome in headed mode (visible browser window)")
   .option("--retries <n>", "Retry blocked goals up to N times (default: 0)")
+  .option("--allow-credential-env <names>", "Comma-separated env var names allowed in credentials templates")
   .action(async (args: string[], options: Record<string, unknown>) => {
     const configPath = typeof options.config === "string" ? options.config : undefined;
     const resolvedConfigPath = resolveConfigPath(configPath);
@@ -344,9 +377,25 @@ cli
       process.exit(2);
     }
 
-    const url = typeof options.url === "string" ? options.url : config?.baseUrl;
+    let url: string | undefined;
+    try {
+      url =
+        typeof options.url === "string"
+          ? assertHttpUrl(options.url, "--url")
+          : config?.baseUrl;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Error: ${message}`);
+      process.exit(2);
+    }
     if (!url) {
       console.error("Error: --url is required unless baseUrl is set in qagent.config.json.");
+      process.exit(2);
+    }
+
+    const allowedCredentialEnvNames = parseAllowedCredentialEnvOption(options.allowCredentialEnv);
+    if (allowedCredentialEnvNames === null) {
+      console.error("Error: --allow-credential-env must be a comma-separated list of environment variable names.");
       process.exit(2);
     }
 
@@ -359,7 +408,7 @@ cli
 
     let credentials;
     try {
-      credentials = loadCredentials(credentialsPath);
+      credentials = loadCredentials(credentialsPath, { allowedEnvNames: allowedCredentialEnvNames });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`Error: ${message}`);
@@ -384,16 +433,16 @@ cli
     }
     const formattedSkillsDescription = formatSkillsDescriptionForPrompt(skillsDescription);
 
-    const timeoutOption = parsePositiveIntegerOption(options.timeout);
+    const timeoutOption = parseIntegerOption(options.timeout);
     if (timeoutOption === null) {
       console.error("Error: --timeout must be a positive integer.");
       process.exit(2);
     }
     const timeout = timeoutOption ?? config?.timeoutMs ?? 180_000;
 
-    const retriesOption = parsePositiveIntegerOption(options.retries);
+    const retriesOption = parseIntegerOption(options.retries, { allowZero: true });
     if (retriesOption === null) {
-      console.error("Error: --retries must be a positive integer.");
+      console.error("Error: --retries must be a non-negative integer.");
       process.exit(2);
     }
     const retries = retriesOption ?? 0;
@@ -423,6 +472,7 @@ cli
         timeout,
         parallel: options.parallel === true,
         headed: options.headed === true,
+        retries,
       });
 
       printSummaryTable(suite);
@@ -431,16 +481,29 @@ cli
 
     // Single-goal mode
     const { runGoal } = await import("./runner.js");
-    const result = await runGoal({
-      vendor,
-      url,
-      goal: options.goal as string,
-      credentialsJson,
-      skillsDescription: formattedSkillsDescription,
-      basicAuth: credentials?.basicAuth,
-      timeout,
-      headed: options.headed === true,
-    });
+    const result = await (async () => {
+      let attempt = 0;
+
+      while (true) {
+        const nextResult = await runGoal({
+          vendor,
+          url,
+          goal: options.goal as string,
+          credentialsJson,
+          skillsDescription: formattedSkillsDescription,
+          basicAuth: credentials?.basicAuth,
+          timeout,
+          headed: options.headed === true,
+        });
+
+        if (nextResult.status !== "blocked" || attempt >= retries) {
+          return nextResult;
+        }
+
+        attempt += 1;
+        console.log(`[QAgent] Retrying blocked run (attempt ${attempt + 1}/${retries + 1})...`);
+      }
+    })();
 
     console.log(`\n[QAgent] ${result.status.toUpperCase()}: ${result.summary}`);
     process.exit(result.exitCode);

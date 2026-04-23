@@ -1,6 +1,6 @@
 # QAgent
 
-**Write a test goal in plain English. QAgent runs it against your app and tells you if it actually works.**
+**Write a test goal in plain English. QAgent runs it against your `http` or `https` app and tells you if it actually works.**
 
 QAgent is a CLI for AI-native QA. It uses Claude Code or Codex plus `agent-browser`, records screenshots, and returns a simple verdict: `pass`, `fail`, or `blocked`.
 
@@ -96,6 +96,7 @@ Why teams like it:
 - it works well with coding agents
 - it supports both one-off checks and project-local suites
 - it can use credentials and app-specific context
+- it keeps browser runs in isolated temp workdirs with filtered subprocess environments
 - it can run multi-goal suites in parallel when speed matters
 
 ## How It Works
@@ -107,7 +108,7 @@ QAgent starts a fresh browser session
     ->
 QAgent opens your app before the agent starts
     ->
-The selected agent uses agent-browser to verify the flow
+The selected agent verifies the flow from an isolated temp workdir
     ->
 QAgent reads result.json and saves screenshots
     ->
@@ -117,8 +118,11 @@ You get pass / fail / blocked
 Important details:
 
 - each goal gets a fresh browser session
-- HTTP basic auth can be applied before page load
-- app login credentials can be passed in
+- each goal also gets an isolated temp execution directory instead of running from your repo root
+- target URLs must use `http` or `https`
+- HTTP basic auth can be applied before page load without being passed into the model prompt
+- app login credentials from `users` can be passed in
+- `${ENV_VAR}` interpolation in credentials files is opt-in via `--allow-credential-env`
 - screenshots and a vendor-specific session log such as `claude-session.log` or `codex-session.log` are saved per run
 - browser startup happens outside the prompt for better reliability
 
@@ -172,6 +176,12 @@ Once you want more than one ad-hoc test, add project-local files.
 }
 ```
 
+Notes:
+
+- `basicAuth` is used by QAgent before the first page load and is not rendered into the model prompt.
+- `users` are the credentials passed into the testing agent for in-app login steps.
+- If the file uses `${ENV_VAR}` placeholders, pass the names explicitly with `--allow-credential-env`.
+
 ### `skills.md`
 
 This file is optional, but it is especially valuable for vibe-coded apps and internal tools.
@@ -213,11 +223,17 @@ qagent --goals tests/e2e/goals.json --url https://staging.example.com
 # Run goals in parallel
 qagent --parallel
 
+# Retry blocked runs once before failing
+qagent --retries 1
+
 # Use a custom config
 qagent --config path/to/qagent.config.json
 
 # Override credentials or skills
 qagent --credentials .qagent/staging-creds.json --skills skills.md
+
+# Allow specific env vars to be interpolated in the credentials file
+qagent --credentials .qagent/staging-creds.json --allow-credential-env BASIC_AUTH_PASSWORD,TEST_USER_PASSWORD
 
 # Open a visible browser window
 qagent --headed
@@ -239,7 +255,7 @@ qagent skills get core
 
 | Flag | Default | Description |
 | :--- | :--- | :--- |
-| `--url <url>` | from config `baseUrl` | Target URL |
+| `--url <url>` | from config `baseUrl` | Target URL (`http` or `https` only) |
 | `--goal <text>` | - | Single goal |
 | `--goals <path>` | from config `goalsFile` | Path to goals file |
 | `--config <path>` | `./qagent.config.json` | Config file |
@@ -247,6 +263,8 @@ qagent skills get core
 | `--skills <path>` | from config `skillsFile` | Skills description file |
 | `--vendor <vendor>` | `claude` | Agent vendor (`claude` or `codex`) |
 | `--timeout <ms>` | `180000` | Wall-clock limit per goal |
+| `--retries <n>` | `0` | Retry blocked runs up to `n` additional times |
+| `--allow-credential-env <names>` | - | Comma-separated env var names allowed in credentials interpolation |
 | `--parallel` | `false` | Run suite goals concurrently |
 | `--headed` | `false` | Run Chrome visibly for debugging |
 

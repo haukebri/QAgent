@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import { mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
+import { buildSubprocessEnv } from "./subprocess-env.js";
 
 export interface BrowserSession {
   sessionName: string;
@@ -14,10 +15,9 @@ function agentBrowser(args: string[], sessionName: string, socketDir: string, gl
       encoding: "utf8",
       timeout: 60_000,
       stdio: ["ignore", "pipe", "pipe"],
-      env: {
-        ...process.env,
+      env: buildSubprocessEnv("agent-browser", {
         AGENT_BROWSER_SOCKET_DIR: socketDir,
-      },
+      }),
     }).trim();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -53,10 +53,9 @@ export function closeBrowserSession(session: BrowserSession): void {
       encoding: "utf8",
       timeout: 10_000,
       stdio: ["ignore", "pipe", "pipe"],
-      env: {
-        ...process.env,
+      env: buildSubprocessEnv("agent-browser", {
         AGENT_BROWSER_SOCKET_DIR: session.socketDir,
-      },
+      }),
     });
   } catch {
     // Best-effort cleanup; don't fail the run

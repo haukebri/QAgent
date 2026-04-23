@@ -25,16 +25,51 @@ async function createClaudeStub(tempDir) {
 
   await writeFile(
     helperPath,
-    `import { mkdirSync, writeFileSync } from "node:fs";
+    `import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
+function resolveMode() {
+  const sequence = process.env.QAGENT_CLAUDE_MODE_SEQUENCE ?? "";
+  if (!sequence) {
+    return process.env.QAGENT_CLAUDE_MODE ?? "pass";
+  }
+
+  const statePath = process.env.QAGENT_CLAUDE_MODE_STATE_PATH;
+  if (!statePath) {
+    throw new Error("QAGENT_CLAUDE_MODE_STATE_PATH is required when QAGENT_CLAUDE_MODE_SEQUENCE is set.");
+  }
+
+  const modes = sequence
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const currentIndex = (() => {
+    try {
+      return Number.parseInt(readFileSync(statePath, "utf8"), 10) || 0;
+    } catch {
+      return 0;
+    }
+  })();
+  const mode = modes[Math.min(currentIndex, modes.length - 1)] ?? "pass";
+  writeFileSync(statePath, String(currentIndex + 1));
+  return mode;
+}
+
+if (process.argv.includes("--version")) {
+  process.stdout.write("claude 0.0.0-test\\n");
+  process.exit(0);
+}
+
 const promptIndex = process.argv.indexOf("-p");
 const prompt = promptIndex >= 0 ? process.argv[promptIndex + 1] ?? "" : "";
-const mode = process.env.QAGENT_CLAUDE_MODE ?? "pass";
+const mode = resolveMode();
 const stdoutText = process.env.QAGENT_CLAUDE_STDOUT ?? "";
 const stderrText = process.env.QAGENT_CLAUDE_STDERR ?? "";
 const capturePromptPath = process.env.QAGENT_CAPTURE_PROMPT ?? "";
+const captureArgsPath = process.env.QAGENT_CAPTURE_CLAUDE_ARGS ?? "";
+const captureEnvPath = process.env.QAGENT_CAPTURE_CLAUDE_ENV ?? "";
+const captureCwdPath = process.env.QAGENT_CAPTURE_CLAUDE_CWD ?? "";
 const delayMs = Number.parseInt(process.env.QAGENT_CLAUDE_DELAY_MS ?? "0", 10);
 
 if (stdoutText) {
@@ -47,6 +82,18 @@ if (stderrText) {
 
 if (capturePromptPath) {
   writeFileSync(capturePromptPath, prompt);
+}
+
+if (captureArgsPath) {
+  writeFileSync(captureArgsPath, JSON.stringify(process.argv.slice(2), null, 2));
+}
+
+if (captureEnvPath) {
+  writeFileSync(captureEnvPath, JSON.stringify(process.env, null, 2));
+}
+
+if (captureCwdPath) {
+  writeFileSync(captureCwdPath, process.cwd());
 }
 
 if (Number.isFinite(delayMs) && delayMs > 0) {
@@ -115,16 +162,46 @@ async function createCodexStub(tempDir) {
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
+function resolveMode() {
+  const sequence = process.env.QAGENT_CODEX_MODE_SEQUENCE ?? "";
+  if (!sequence) {
+    return process.env.QAGENT_CODEX_MODE ?? "pass";
+  }
+
+  const statePath = process.env.QAGENT_CODEX_MODE_STATE_PATH;
+  if (!statePath) {
+    throw new Error("QAGENT_CODEX_MODE_STATE_PATH is required when QAGENT_CODEX_MODE_SEQUENCE is set.");
+  }
+
+  const modes = sequence
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const currentIndex = (() => {
+    try {
+      return Number.parseInt(readFileSync(statePath, "utf8"), 10) || 0;
+    } catch {
+      return 0;
+    }
+  })();
+  const mode = modes[Math.min(currentIndex, modes.length - 1)] ?? "pass";
+  writeFileSync(statePath, String(currentIndex + 1));
+  return mode;
+}
+
 if (process.argv.includes("--version")) {
   process.stdout.write("codex 0.0.0-test\\n");
   process.exit(0);
 }
 
 const prompt = process.argv[2] === "exec" ? readFileSync(0, "utf8") : "";
-const mode = process.env.QAGENT_CODEX_MODE ?? "pass";
+const mode = resolveMode();
 const stdoutText = process.env.QAGENT_CODEX_STDOUT ?? "";
 const stderrText = process.env.QAGENT_CODEX_STDERR ?? "";
 const capturePromptPath = process.env.QAGENT_CAPTURE_PROMPT ?? "";
+const captureArgsPath = process.env.QAGENT_CAPTURE_CODEX_ARGS ?? "";
+const captureEnvPath = process.env.QAGENT_CAPTURE_CODEX_ENV ?? "";
+const captureCwdPath = process.env.QAGENT_CAPTURE_CODEX_CWD ?? "";
 const delayMs = Number.parseInt(process.env.QAGENT_CODEX_DELAY_MS ?? "0", 10);
 
 if (stdoutText) {
@@ -137,6 +214,18 @@ if (stderrText) {
 
 if (capturePromptPath) {
   writeFileSync(capturePromptPath, prompt);
+}
+
+if (captureArgsPath) {
+  writeFileSync(captureArgsPath, JSON.stringify(process.argv.slice(2), null, 2));
+}
+
+if (captureEnvPath) {
+  writeFileSync(captureEnvPath, JSON.stringify(process.env, null, 2));
+}
+
+if (captureCwdPath) {
+  writeFileSync(captureCwdPath, process.cwd());
 }
 
 if (Number.isFinite(delayMs) && delayMs > 0) {
@@ -394,6 +483,89 @@ test("one-off run succeeds with --vendor codex and writes result plus session lo
   assert.match(browserLog, new RegExp(`--session ${sessionName} close`));
 });
 
+test("codex runs in a workspace-write sandbox with an isolated cwd and filtered environment", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const binDir = await createCodexStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+  const capturedArgsPath = path.join(tempDir, "codex-args.json");
+  const capturedEnvPath = path.join(tempDir, "codex-env.json");
+  const capturedCwdPath = path.join(tempDir, "codex-cwd.txt");
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["--vendor", "codex", "--url", "https://example.com", "--goal", "Check the homepage loads"],
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      OPENAI_API_KEY: "test-openai-key",
+      QAGENT_CAPTURE_CODEX_ARGS: capturedArgsPath,
+      QAGENT_CAPTURE_CODEX_ENV: capturedEnvPath,
+      QAGENT_CAPTURE_CODEX_CWD: capturedCwdPath,
+      SHOULD_NOT_LEAK: "super-secret",
+    },
+  });
+
+  assert.equal(result.code, 0);
+
+  const args = JSON.parse(await readFile(capturedArgsPath, "utf8"));
+  assert.ok(args.includes("--sandbox"));
+  assert.ok(args.includes("workspace-write"));
+  assert.ok(args.includes("--ephemeral"));
+  assert.ok(args.includes("--add-dir"));
+  assert.ok(args.includes("-c"));
+  assert.ok(args.some((arg) => arg.includes("shell_environment_policy.include_only")));
+  assert.ok(args.some((arg) => arg.includes("AGENT_BROWSER_SOCKET_DIR")));
+  assert.doesNotMatch(args.join(" "), /danger-full-access/);
+
+  const childEnv = JSON.parse(await readFile(capturedEnvPath, "utf8"));
+  assert.equal(childEnv.RESULT_PATH.endsWith("result.json"), true);
+  assert.equal(childEnv.OPENAI_API_KEY, "test-openai-key");
+  assert.equal(childEnv.SHOULD_NOT_LEAK, undefined);
+
+  const childCwd = (await readFile(capturedCwdPath, "utf8")).trim();
+  assert.notEqual(childCwd, tempDir);
+  assert.doesNotMatch(childCwd, new RegExp(`${tempDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
+});
+
+test("claude runs from an isolated cwd and only adds explicit artifact directories", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const binDir = await createClaudeStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+  const capturedArgsPath = path.join(tempDir, "claude-args.json");
+  const capturedEnvPath = path.join(tempDir, "claude-env.json");
+  const capturedCwdPath = path.join(tempDir, "claude-cwd.txt");
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["--url", "https://example.com", "--goal", "Check the homepage loads"],
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      ANTHROPIC_API_KEY: "test-anthropic-key",
+      QAGENT_CAPTURE_CLAUDE_ARGS: capturedArgsPath,
+      QAGENT_CAPTURE_CLAUDE_ENV: capturedEnvPath,
+      QAGENT_CAPTURE_CLAUDE_CWD: capturedCwdPath,
+      SHOULD_NOT_LEAK: "super-secret",
+    },
+  });
+
+  assert.equal(result.code, 0);
+
+  const args = JSON.parse(await readFile(capturedArgsPath, "utf8"));
+  assert.ok(args.includes("--bare"));
+  assert.ok(args.includes("--tools"));
+  assert.ok(args.includes("--add-dir"));
+  assert.ok(args.includes("--allowedTools"));
+
+  const childEnv = JSON.parse(await readFile(capturedEnvPath, "utf8"));
+  assert.equal(childEnv.ANTHROPIC_API_KEY, "test-anthropic-key");
+  assert.equal(childEnv.SHOULD_NOT_LEAK, undefined);
+
+  const childCwd = (await readFile(capturedCwdPath, "utf8")).trim();
+  assert.notEqual(childCwd, tempDir);
+  assert.doesNotMatch(childCwd, new RegExp(`${tempDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
+});
+
 test("one-off run can load baseUrl and defaults from qagent.config.json in the project root", async (t) => {
   const tempDir = await makeTempDir(t);
   const binDir = await createClaudeStub(tempDir);
@@ -444,8 +616,8 @@ test("one-off run can load baseUrl and defaults from qagent.config.json in the p
   const promptText = await readFile(capturedPromptPath, "utf8");
   assert.match(promptText, /TARGET URL: https:\/\/config\.example\.com/);
   assert.match(promptText, /TEST CREDENTIALS \(use as needed\):/);
-  assert.match(promptText, /"username": "staging"/);
   assert.match(promptText, /"email": "user@example\.com"/);
+  assert.doesNotMatch(promptText, /secret-basic/);
 });
 
 test("one-off run can load vendor from qagent.config.json", async (t) => {
@@ -616,7 +788,7 @@ test("explicit --credentials overrides credentialsFile from config", async (t) =
   assert.doesNotMatch(promptText, /default@example\.com/);
 });
 
-test("credentials support env var interpolation", async (t) => {
+test("credentials support env var interpolation when explicitly allowlisted", async (t) => {
   const tempDir = await makeTempDir(t);
   const binDir = await createClaudeStub(tempDir);
   await createAgentBrowserStub(tempDir);
@@ -651,7 +823,7 @@ test("credentials support env var interpolation", async (t) => {
 
   const result = await runCli({
     cwd: tempDir,
-    args: ["--goal", "I can log in"],
+    args: ["--goal", "I can log in", "--allow-credential-env", "BASIC_AUTH_PASSWORD,TEST_USER_PASSWORD"],
     env: {
       ...process.env,
       PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
@@ -664,8 +836,49 @@ test("credentials support env var interpolation", async (t) => {
   assert.equal(result.code, 0);
 
   const promptText = await readFile(capturedPromptPath, "utf8");
-  assert.match(promptText, /interpolated-basic-password/);
   assert.match(promptText, /interpolated-user-password/);
+  assert.doesNotMatch(promptText, /interpolated-basic-password/);
+});
+
+test("credentials interpolation rejects env vars unless they are explicitly allowlisted", async (t) => {
+  const tempDir = await makeTempDir(t);
+
+  await mkdir(path.join(tempDir, ".qagent"), { recursive: true });
+  await writeFile(
+    path.join(tempDir, "qagent.config.json"),
+    JSON.stringify({
+      baseUrl: "https://config.example.com",
+      credentialsFile: ".qagent/test-credentials.json",
+    }),
+    "utf8",
+  );
+  await writeFile(
+    path.join(tempDir, ".qagent", "test-credentials.json"),
+    JSON.stringify({
+      users: [
+        {
+          label: "default",
+          email: "user@example.com",
+          password: "${TEST_USER_PASSWORD}",
+        },
+      ],
+    }),
+    "utf8",
+  );
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["--goal", "I can log in"],
+    env: {
+      ...process.env,
+      PATH: "/usr/bin:/bin",
+      TEST_USER_PASSWORD: "interpolated-user-password",
+    },
+  });
+
+  assert.equal(result.code, 2);
+  assert.match(result.stderr, /allow-credential-env/);
+  assert.equal(result.stdout, "");
 });
 
 test("a second run with the same goal gets a fresh directory instead of reusing stale artifacts", async (t) => {
@@ -1180,6 +1393,48 @@ test("invalid qagent.config.json fails fast as a setup error", async (t) => {
   assert.equal(result.stdout, "");
 });
 
+test("non-http baseUrl in qagent.config.json fails fast as a setup error", async (t) => {
+  const tempDir = await makeTempDir(t);
+
+  await writeFile(
+    path.join(tempDir, "qagent.config.json"),
+    JSON.stringify({
+      baseUrl: "file:///etc/passwd",
+    }),
+    "utf8",
+  );
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["--goal", "Goal"],
+    env: {
+      ...process.env,
+      PATH: "/usr/bin:/bin",
+    },
+  });
+
+  assert.equal(result.code, 2);
+  assert.match(result.stderr, /http or https/);
+  assert.equal(result.stdout, "");
+});
+
+test("non-http --url values are rejected before browser startup", async (t) => {
+  const tempDir = await makeTempDir(t);
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["--url", "file:///etc/passwd", "--goal", "Goal"],
+    env: {
+      ...process.env,
+      PATH: "/usr/bin:/bin",
+    },
+  });
+
+  assert.equal(result.code, 2);
+  assert.match(result.stderr, /--url must use http or https/);
+  assert.equal(result.stdout, "");
+});
+
 test("invalid qagent credentials file fails fast as a setup error", async (t) => {
   const tempDir = await makeTempDir(t);
 
@@ -1219,6 +1474,31 @@ test("invalid qagent credentials file fails fast as a setup error", async (t) =>
   assert.equal(result.stdout, "");
 });
 
+test("blocked runs are retried up to --retries and can recover", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const binDir = await createClaudeStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+  const statePath = path.join(tempDir, "claude-retry-state.txt");
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["--url", "https://example.com", "--goal", "Goal", "--retries", "1"],
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      QAGENT_CLAUDE_MODE_SEQUENCE: "no-result,pass",
+      QAGENT_CLAUDE_MODE_STATE_PATH: statePath,
+    },
+  });
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /Retrying blocked run/);
+  assert.match(result.stdout, /\[QAgent\] PASS: Stubbed pass/);
+
+  const runDirs = await getRunDirs(tempDir);
+  assert.equal(runDirs.length, 2);
+});
+
 for (const scenario of [
   {
     name: "rejects a non-numeric --timeout value",
@@ -1229,6 +1509,11 @@ for (const scenario of [
     name: "rejects a negative --timeout value before cac misparses it",
     args: ["--url", "https://example.com", "--goal", "Goal", "--timeout", "-1"],
     errorText: "Error: --timeout must be a positive integer.",
+  },
+  {
+    name: "rejects a negative --retries value before cac misparses it",
+    args: ["--url", "https://example.com", "--goal", "Goal", "--retries", "-1"],
+    errorText: "Error: --retries must be a non-negative integer.",
   },
 ]) {
   test(scenario.name, async (t) => {
@@ -1250,3 +1535,21 @@ for (const scenario of [
     assert.equal(result.stdout, "");
   });
 }
+
+test("--retries 0 is accepted", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const binDir = await createClaudeStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["--url", "https://example.com", "--goal", "Goal", "--retries", "0"],
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+    },
+  });
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /\[QAgent\] PASS: Stubbed pass/);
+});

@@ -3,7 +3,7 @@ import type { Vendor } from "./vendor.js";
 function buildToolsSection(vendor: Vendor, screenshotDir: string, resultPath: string): string {
   if (vendor === "claude") {
     return [
-      "- You have Bash access restricted to `agent-browser`. You do not have unrestricted shell access.",
+      "- You have Bash access restricted to `agent-browser` and file-write access only for the run artifacts. You do not have unrestricted shell or project file access.",
       "- Use `agent-browser snapshot` to get an accessibility tree with @e-refs, then act on the refs (`click @e3`, `fill @e5 \"...\"`). Prefer @e-refs over CSS selectors.",
       `- Use \`agent-browser screenshot ${screenshotDir}/NN-<step>.png\` after every meaningful state change. Number them sequentially (01-, 02-, ...).`,
     ].join("\n");

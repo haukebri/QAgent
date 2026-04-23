@@ -29,8 +29,14 @@ const CredentialsSchema = z.object({
 
 export type QAgentCredentials = z.infer<typeof CredentialsSchema>;
 
-function interpolateEnvString(value: string, filePath: string): string {
+function interpolateEnvString(value: string, filePath: string, allowedEnvNames: ReadonlySet<string>): string {
   return value.replaceAll(/\$\{([^}]+)\}/g, (_match, name: string) => {
+    if (!allowedEnvNames.has(name)) {
+      throw new Error(
+        `Environment variable ${name} is not allowed in ${filePath}. Pass --allow-credential-env ${name} to permit it.`,
+      );
+    }
+
     const resolved = process.env[name];
     if (resolved === undefined) {
       throw new Error(`Environment variable ${name} is not set (needed by ${filePath}).`);
@@ -40,25 +46,28 @@ function interpolateEnvString(value: string, filePath: string): string {
   });
 }
 
-function interpolateEnv(value: unknown, filePath: string): unknown {
+function interpolateEnv(value: unknown, filePath: string, allowedEnvNames: ReadonlySet<string>): unknown {
   if (typeof value === "string") {
-    return interpolateEnvString(value, filePath);
+    return interpolateEnvString(value, filePath, allowedEnvNames);
   }
 
   if (Array.isArray(value)) {
-    return value.map((entry) => interpolateEnv(entry, filePath));
+    return value.map((entry) => interpolateEnv(entry, filePath, allowedEnvNames));
   }
 
   if (value && typeof value === "object") {
     return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [key, interpolateEnv(entry, filePath)]),
+      Object.entries(value).map(([key, entry]) => [key, interpolateEnv(entry, filePath, allowedEnvNames)]),
     );
   }
 
   return value;
 }
 
-export function loadCredentials(credentialsPath: string | undefined): QAgentCredentials | null {
+export function loadCredentials(
+  credentialsPath: string | undefined,
+  opts?: { allowedEnvNames?: ReadonlySet<string> },
+): QAgentCredentials | null {
   if (!credentialsPath) {
     return null;
   }
@@ -66,7 +75,7 @@ export function loadCredentials(credentialsPath: string | undefined): QAgentCred
   try {
     const raw = readFileSync(credentialsPath, "utf8");
     const parsed = JSON.parse(raw) as unknown;
-    const interpolated = interpolateEnv(parsed, credentialsPath);
+    const interpolated = interpolateEnv(parsed, credentialsPath, opts?.allowedEnvNames ?? new Set());
     return CredentialsSchema.parse(interpolated);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -79,5 +88,9 @@ export function formatCredentialsForPrompt(credentials: QAgentCredentials | null
     return "None provided.";
   }
 
-  return JSON.stringify(credentials, null, 2);
+  if (!credentials.users || credentials.users.length === 0) {
+    return "None provided.";
+  }
+
+  return JSON.stringify({ users: credentials.users }, null, 2);
 }

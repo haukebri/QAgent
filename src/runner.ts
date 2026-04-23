@@ -6,6 +6,7 @@ import { closeBrowserSession, startBrowserSession } from "./browser-session.js";
 import type { Goal } from "./goals.js";
 import { buildPrompt } from "./prompt.js";
 import { readResult } from "./result.js";
+import { buildSubprocessEnv, getCodexShellEnvironmentIncludeOnly } from "./subprocess-env.js";
 import { formatVendorName, getVendorSessionLogFileName, type Vendor } from "./vendor.js";
 
 export interface RunResult {
@@ -75,7 +76,14 @@ function getVendorSessionConfig(opts: {
         "plugins",
         "--skip-git-repo-check",
         "--sandbox",
-        "danger-full-access",
+        "workspace-write",
+        "--add-dir",
+        opts.runDir,
+        "--add-dir",
+        opts.browserSocketDir,
+        "--ephemeral",
+        "-c",
+        `shell_environment_policy.include_only=${JSON.stringify(getCodexShellEnvironmentIncludeOnly())}`,
         "--color",
         "never",
         "-o",
@@ -83,13 +91,12 @@ function getVendorSessionConfig(opts: {
         "-",
       ],
       cwd: opts.executionDir,
-      env: {
-        ...process.env,
+      env: buildSubprocessEnv("codex", {
         AGENT_BROWSER_SESSION: opts.sessionName,
         AGENT_BROWSER_SOCKET_DIR: opts.browserSocketDir,
         RESULT_PATH: opts.resultPath,
         SCREENSHOT_DIR: opts.screenshotDir,
-      },
+      }),
       label: "Codex",
       stdin: opts.prompt,
       streamOutput: false,
@@ -98,12 +105,29 @@ function getVendorSessionConfig(opts: {
 
   return {
     bin: "claude",
-    args: ["-p", opts.prompt, "--strict-mcp-config", "--no-chrome", "--allowedTools", "Bash(agent-browser:*)", "Read", "Write"],
-    env: {
-      ...process.env,
+    args: [
+      "-p",
+      opts.prompt,
+      "--bare",
+      "--no-session-persistence",
+      "--strict-mcp-config",
+      "--no-chrome",
+      "--tools",
+      "Bash",
+      "Write",
+      "--allowedTools",
+      "Bash(agent-browser:*)",
+      "Write",
+      "--add-dir",
+      opts.runDir,
+      "--add-dir",
+      opts.browserSocketDir,
+    ],
+    cwd: opts.executionDir,
+    env: buildSubprocessEnv("claude", {
       AGENT_BROWSER_SESSION: opts.sessionName,
       AGENT_BROWSER_SOCKET_DIR: opts.browserSocketDir,
-    },
+    }),
     label: "Claude",
     streamOutput: true,
   };
@@ -262,7 +286,7 @@ export async function runGoal(opts: {
   const screenshotDir = path.resolve(runDir);
   const logPath = path.resolve(runDir, getVendorSessionLogFileName(vendor));
   const browserSocketDir = mkdtempSync(path.join(os.tmpdir(), "qagent-ab-"));
-  const executionDir = vendor === "codex" ? mkdtempSync(path.join(os.tmpdir(), "qa-exec-")) : runDir;
+  const executionDir = mkdtempSync(path.join(os.tmpdir(), "qagent-exec-"));
 
   // Pre-start agent-browser session: set credentials + verify URL is reachable
   let browserSession;
@@ -363,6 +387,24 @@ export interface SuiteResult {
   exitCode: number;
 }
 
+async function runGoalWithRetries(
+  opts: Parameters<typeof runGoal>[0],
+  retries: number | undefined,
+): Promise<RunResult> {
+  const maxRetries = retries ?? 0;
+  let attempt = 0;
+
+  while (true) {
+    const result = await runGoal(opts);
+    if (result.status !== "blocked" || attempt >= maxRetries) {
+      return result;
+    }
+
+    attempt += 1;
+    console.log(`[QAgent] Retrying blocked run (attempt ${attempt + 1}/${maxRetries + 1})...`);
+  }
+}
+
 async function runGoalEntry(
   goalDef: Goal,
   index: number,
@@ -375,12 +417,13 @@ async function runGoalEntry(
     basicAuth?: { username: string; password: string };
     timeout?: number;
     headed?: boolean;
+    retries?: number;
   },
 ): Promise<GoalResult> {
   console.log(`\n[QAgent] Goal ${index + 1}/${total}: ${goalDef.name}`);
   console.log(`[QAgent] "${goalDef.goal}"\n`);
 
-  const result = await runGoal({
+  const result = await runGoalWithRetries({
     vendor: opts.vendor,
     url: opts.url,
     goal: goalDef.goal,
@@ -389,7 +432,7 @@ async function runGoalEntry(
     basicAuth: opts.basicAuth,
     timeout: opts.timeout,
     headed: opts.headed,
-  });
+  }, opts.retries);
 
   const icon = result.status === "pass" ? "PASS" : result.status === "fail" ? "FAIL" : "BLOCKED";
   console.log(`\n[QAgent] ${icon} (${goalDef.name}): ${result.summary}`);
@@ -434,6 +477,7 @@ export async function runSuite(opts: {
   timeout?: number;
   parallel?: boolean;
   headed?: boolean;
+  retries?: number;
 }): Promise<SuiteResult> {
   const vendor = opts.vendor ?? "claude";
   const shared = {
@@ -444,6 +488,7 @@ export async function runSuite(opts: {
     basicAuth: opts.basicAuth,
     timeout: opts.timeout,
     headed: opts.headed,
+    retries: opts.retries,
   };
 
   if (opts.parallel) {

@@ -2,10 +2,15 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { SUPPORTED_VENDORS } from "./vendor.js";
+import { isHttpUrl } from "./url.js";
 
 const ConfigSchema = z.object({
   vendor: z.enum(SUPPORTED_VENDORS).optional(),
-  baseUrl: z.string().url().optional(),
+  baseUrl: z
+    .string()
+    .url()
+    .refine((value) => isHttpUrl(value), { message: "baseUrl must use http or https." })
+    .optional(),
   goalsFile: z.string().min(1).optional(),
   credentialsFile: z.string().min(1).optional(),
   skillsFile: z.string().min(1).optional(),

@@ -71,6 +71,7 @@ const captureArgsPath = process.env.QAGENT_CAPTURE_CLAUDE_ARGS ?? "";
 const captureEnvPath = process.env.QAGENT_CAPTURE_CLAUDE_ENV ?? "";
 const captureCwdPath = process.env.QAGENT_CAPTURE_CLAUDE_CWD ?? "";
 const delayMs = Number.parseInt(process.env.QAGENT_CLAUDE_DELAY_MS ?? "0", 10);
+const delayAfterResultMs = Number.parseInt(process.env.QAGENT_CLAUDE_DELAY_AFTER_RESULT_MS ?? "0", 10);
 
 if (stdoutText) {
   process.stdout.write(stdoutText);
@@ -125,6 +126,10 @@ writeFileSync(
     evidence: [],
   }),
 );
+
+if (Number.isFinite(delayAfterResultMs) && delayAfterResultMs > 0) {
+  await delay(delayAfterResultMs);
+}
 `,
     "utf8",
   );
@@ -162,21 +167,24 @@ async function createCodexStub(tempDir) {
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
-function resolveMode() {
-  const sequence = process.env.QAGENT_CODEX_MODE_SEQUENCE ?? "";
-  if (!sequence) {
-    return process.env.QAGENT_CODEX_MODE ?? "pass";
+function resolveSequenceIndex() {
+  const hasSequencedValues = [
+    process.env.QAGENT_CODEX_MODE_SEQUENCE,
+    process.env.QAGENT_CODEX_STDOUT_SEQUENCE,
+    process.env.QAGENT_CODEX_STDERR_SEQUENCE,
+    process.env.QAGENT_CODEX_RESULT_STATUS_SEQUENCE,
+    process.env.QAGENT_CODEX_RESULT_SUMMARY_SEQUENCE,
+  ].some((value) => typeof value === "string" && value.trim().length > 0);
+
+  if (!hasSequencedValues) {
+    return 0;
   }
 
   const statePath = process.env.QAGENT_CODEX_MODE_STATE_PATH;
   if (!statePath) {
-    throw new Error("QAGENT_CODEX_MODE_STATE_PATH is required when QAGENT_CODEX_MODE_SEQUENCE is set.");
+    throw new Error("QAGENT_CODEX_MODE_STATE_PATH is required when Codex sequence env vars are set.");
   }
 
-  const modes = sequence
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
   const currentIndex = (() => {
     try {
       return Number.parseInt(readFileSync(statePath, "utf8"), 10) || 0;
@@ -184,9 +192,22 @@ function resolveMode() {
       return 0;
     }
   })();
-  const mode = modes[Math.min(currentIndex, modes.length - 1)] ?? "pass";
+
   writeFileSync(statePath, String(currentIndex + 1));
-  return mode;
+  return currentIndex;
+}
+
+function pickSequenceValue(sequence, fallback, index) {
+  if (!sequence) {
+    return fallback;
+  }
+
+  const items = sequence
+    .split("|||")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+  return items[Math.min(index, items.length - 1)] ?? fallback;
 }
 
 if (process.argv.includes("--version")) {
@@ -195,14 +216,22 @@ if (process.argv.includes("--version")) {
 }
 
 const prompt = process.argv[2] === "exec" ? readFileSync(0, "utf8") : "";
-const mode = resolveMode();
-const stdoutText = process.env.QAGENT_CODEX_STDOUT ?? "";
-const stderrText = process.env.QAGENT_CODEX_STDERR ?? "";
+const sequenceIndex = resolveSequenceIndex();
+const mode = pickSequenceValue(process.env.QAGENT_CODEX_MODE_SEQUENCE ?? "", process.env.QAGENT_CODEX_MODE ?? "pass", sequenceIndex);
+const stdoutText = pickSequenceValue(process.env.QAGENT_CODEX_STDOUT_SEQUENCE ?? "", process.env.QAGENT_CODEX_STDOUT ?? "", sequenceIndex);
+const stderrText = pickSequenceValue(process.env.QAGENT_CODEX_STDERR_SEQUENCE ?? "", process.env.QAGENT_CODEX_STDERR ?? "", sequenceIndex);
+const resultStatus = pickSequenceValue(process.env.QAGENT_CODEX_RESULT_STATUS_SEQUENCE ?? "", process.env.QAGENT_RESULT_STATUS ?? "pass", sequenceIndex);
+const resultSummary = pickSequenceValue(
+  process.env.QAGENT_CODEX_RESULT_SUMMARY_SEQUENCE ?? "",
+  process.env.QAGENT_RESULT_SUMMARY ?? "Stubbed pass",
+  sequenceIndex,
+);
 const capturePromptPath = process.env.QAGENT_CAPTURE_PROMPT ?? "";
 const captureArgsPath = process.env.QAGENT_CAPTURE_CODEX_ARGS ?? "";
 const captureEnvPath = process.env.QAGENT_CAPTURE_CODEX_ENV ?? "";
 const captureCwdPath = process.env.QAGENT_CAPTURE_CODEX_CWD ?? "";
 const delayMs = Number.parseInt(process.env.QAGENT_CODEX_DELAY_MS ?? "0", 10);
+const delayAfterResultMs = Number.parseInt(process.env.QAGENT_CODEX_DELAY_AFTER_RESULT_MS ?? "0", 10);
 
 if (stdoutText) {
   process.stdout.write(stdoutText);
@@ -251,12 +280,16 @@ mkdirSync(path.dirname(resultPath), { recursive: true });
 writeFileSync(
   resultPath,
   JSON.stringify({
-    status: process.env.QAGENT_RESULT_STATUS ?? "pass",
-    summary: process.env.QAGENT_RESULT_SUMMARY ?? "Stubbed pass",
+    status: resultStatus,
+    summary: resultSummary,
     stepsTaken: 1,
     evidence: [],
   }),
 );
+
+if (Number.isFinite(delayAfterResultMs) && delayAfterResultMs > 0) {
+  await delay(delayAfterResultMs);
+}
 `,
     "utf8",
   );
@@ -294,6 +327,9 @@ async function createAgentBrowserStub(tempDir) {
 if [ -n "$QAGENT_AGENT_BROWSER_LOG_PATH" ]; then
   printf '%s\\n' "$*" >> "$QAGENT_AGENT_BROWSER_LOG_PATH"
 fi
+if [ -n "$QAGENT_AGENT_BROWSER_ENV_LOG_PATH" ]; then
+  printf 'timeout=%s args=%s\\n' "\${AGENT_BROWSER_DEFAULT_TIMEOUT:-}" "$*" >> "$QAGENT_AGENT_BROWSER_ENV_LOG_PATH"
+fi
 
 cmd=""
 for arg in "$@"; do
@@ -326,6 +362,9 @@ exit 0
     `@echo off
 if not "%QAGENT_AGENT_BROWSER_LOG_PATH%"=="" (
   echo %*>>"%QAGENT_AGENT_BROWSER_LOG_PATH%"
+)
+if not "%QAGENT_AGENT_BROWSER_ENV_LOG_PATH%"=="" (
+  echo timeout=%AGENT_BROWSER_DEFAULT_TIMEOUT% args=%*>>"%QAGENT_AGENT_BROWSER_ENV_LOG_PATH%"
 )
 
 set cmd=
@@ -527,6 +566,213 @@ test("codex runs in a workspace-write sandbox with an isolated cwd and filtered 
   assert.doesNotMatch(childCwd, new RegExp(`${tempDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
 });
 
+test("codex sandbox can be overridden explicitly for compatibility with agent-browser", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const binDir = await createCodexStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+  const capturedArgsPath = path.join(tempDir, "codex-args.json");
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: [
+      "--vendor",
+      "codex",
+      "--codex-sandbox",
+      "danger-full-access",
+      "--url",
+      "https://example.com",
+      "--goal",
+      "Check the homepage loads",
+    ],
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      OPENAI_API_KEY: "test-openai-key",
+      QAGENT_CAPTURE_CODEX_ARGS: capturedArgsPath,
+    },
+  });
+
+  assert.equal(result.code, 0);
+
+  const args = JSON.parse(await readFile(capturedArgsPath, "utf8"));
+  assert.ok(args.includes("--sandbox"));
+  assert.ok(args.includes("danger-full-access"));
+  assert.doesNotMatch(args.join(" "), /workspace-write/);
+});
+
+test("codex automatically retries with danger-full-access when workspace-write blocks agent-browser", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const binDir = await createCodexStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+  const capturedArgsPath = path.join(tempDir, "codex-args.json");
+  const statePath = path.join(tempDir, "codex-mode-state.txt");
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["--vendor", "codex", "--url", "https://example.com", "--goal", "I can see a headline"],
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      QAGENT_CAPTURE_CODEX_ARGS: capturedArgsPath,
+      QAGENT_CODEX_MODE_STATE_PATH: statePath,
+      QAGENT_CODEX_MODE_SEQUENCE: "pass|||pass",
+      QAGENT_CODEX_STDERR_SEQUENCE: "✗ Daemon process exited during startup with no error output.|||",
+      QAGENT_CODEX_RESULT_STATUS_SEQUENCE: "blocked|||pass",
+      QAGENT_CODEX_RESULT_SUMMARY_SEQUENCE:
+        "I could not verify the headline because the browser automation session failed before I could inspect the live page.|||Example Domain headline is visible.",
+    },
+  });
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /Retrying automatically with danger-full-access/);
+  assert.match(result.stdout, /\[QAgent\] PASS: Example Domain headline is visible\./);
+
+  const args = JSON.parse(await readFile(capturedArgsPath, "utf8"));
+  assert.ok(args.includes("--sandbox"));
+  assert.ok(args.includes("danger-full-access"));
+});
+
+test("codex suite mode also automatically retries with danger-full-access when workspace-write blocks agent-browser", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const binDir = await createCodexStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+  const capturedArgsPath = path.join(tempDir, "codex-suite-args.json");
+  const statePath = path.join(tempDir, "codex-suite-mode-state.txt");
+
+  await writeFile(
+    path.join(tempDir, "goals.json"),
+    JSON.stringify([
+      {
+        name: "headline-visible",
+        goal: "I can see a headline",
+      },
+    ]),
+    "utf8",
+  );
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["--vendor", "codex", "--url", "https://example.com", "--goals", "goals.json"],
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      QAGENT_CAPTURE_CODEX_ARGS: capturedArgsPath,
+      QAGENT_CODEX_MODE_STATE_PATH: statePath,
+      QAGENT_CODEX_MODE_SEQUENCE: "pass|||pass",
+      QAGENT_CODEX_STDERR_SEQUENCE: "✗ Daemon process exited during startup with no error output.|||",
+      QAGENT_CODEX_RESULT_STATUS_SEQUENCE: "blocked|||pass",
+      QAGENT_CODEX_RESULT_SUMMARY_SEQUENCE:
+        "I could not verify the headline because the browser automation session failed before I could inspect the live page.|||Example Domain headline is visible.",
+    },
+  });
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /Retrying automatically with danger-full-access/);
+  assert.match(result.stdout, /\[QAgent\] PASS \(headline-visible\): Example Domain headline is visible\./);
+
+  const args = JSON.parse(await readFile(capturedArgsPath, "utf8"));
+  assert.ok(args.includes("--sandbox"));
+  assert.ok(args.includes("danger-full-access"));
+});
+
+test("codex implicit retry restarts the browser session before the fallback attempt", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const binDir = await createCodexStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+  const statePath = path.join(tempDir, "codex-browser-retry-state.txt");
+  const agentBrowserLogPath = path.join(tempDir, "agent-browser.log");
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["--vendor", "codex", "--url", "https://example.com", "--goal", "I can see a headline"],
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      QAGENT_AGENT_BROWSER_LOG_PATH: agentBrowserLogPath,
+      QAGENT_CODEX_MODE_STATE_PATH: statePath,
+      QAGENT_CODEX_MODE_SEQUENCE: "pass|||pass",
+      QAGENT_CODEX_STDERR_SEQUENCE: "✗ Daemon process exited during startup with no error output.|||",
+      QAGENT_CODEX_RESULT_STATUS_SEQUENCE: "blocked|||pass",
+      QAGENT_CODEX_RESULT_SUMMARY_SEQUENCE:
+        "I could not verify the headline because the browser automation session failed before I could inspect the live page.|||Example Domain headline is visible.",
+    },
+  });
+
+  assert.equal(result.code, 0);
+
+  const browserLog = await readFile(agentBrowserLogPath, "utf8");
+  const openMatches = [...browserLog.matchAll(/--session\s+(\S+)\s+open https:\/\/example\.com/g)];
+  assert.equal(openMatches.length, 2);
+  assert.notEqual(openMatches[0]?.[1], openMatches[1]?.[1]);
+  assert.match(browserLog, new RegExp(`--session ${openMatches[0]?.[1]} close`));
+  assert.match(browserLog, new RegExp(`--session ${openMatches[1]?.[1]} close`));
+});
+
+test("explicit workspace-write still surfaces the codex sandbox compatibility hint", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const binDir = await createCodexStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: [
+      "--vendor",
+      "codex",
+      "--codex-sandbox",
+      "workspace-write",
+      "--url",
+      "https://example.com",
+      "--goal",
+      "I can see a headline",
+    ],
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      QAGENT_CODEX_STDERR: "✗ Daemon process exited during startup with no error output.\n",
+      QAGENT_RESULT_STATUS: "blocked",
+      QAGENT_RESULT_SUMMARY:
+        "I could not verify the headline because the browser automation session failed before I could inspect the live page.",
+    },
+  });
+
+  assert.equal(result.code, 1);
+  assert.match(result.stdout, /workspace-write sandbox blocking agent-browser/);
+  assert.match(result.stdout, /--codex-sandbox danger-full-access/);
+});
+
+test("explicit workspace-write from config still surfaces the codex sandbox compatibility hint", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const binDir = await createCodexStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+
+  await writeFile(
+    path.join(tempDir, "qagent.config.json"),
+    JSON.stringify({
+      vendor: "codex",
+      codexSandbox: "workspace-write",
+      baseUrl: "https://example.com",
+    }),
+    "utf8",
+  );
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["--goal", "I can see a headline"],
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      QAGENT_CODEX_STDERR: "✗ Daemon process exited during startup with no error output.\n",
+      QAGENT_RESULT_STATUS: "blocked",
+      QAGENT_RESULT_SUMMARY:
+        "I could not verify the headline because the browser automation session failed before I could inspect the live page.",
+    },
+  });
+
+  assert.equal(result.code, 1);
+  assert.match(result.stdout, /workspace-write sandbox blocking agent-browser/);
+  assert.match(result.stdout, /--codex-sandbox danger-full-access/);
+});
+
 test("claude runs from an isolated cwd and only adds explicit artifact directories", async (t) => {
   const tempDir = await makeTempDir(t);
   const binDir = await createClaudeStub(tempDir);
@@ -552,7 +798,7 @@ test("claude runs from an isolated cwd and only adds explicit artifact directori
   assert.equal(result.code, 0);
 
   const args = JSON.parse(await readFile(capturedArgsPath, "utf8"));
-  assert.ok(args.includes("--bare"));
+  assert.doesNotMatch(args.join(" "), /--bare/);
   assert.ok(args.includes("--tools"));
   assert.ok(args.includes("--add-dir"));
   assert.ok(args.includes("--allowedTools"));
@@ -571,6 +817,7 @@ test("one-off run can load baseUrl and defaults from qagent.config.json in the p
   const binDir = await createClaudeStub(tempDir);
   await createAgentBrowserStub(tempDir);
   const capturedPromptPath = path.join(tempDir, "captured-prompt.txt");
+  const agentBrowserEnvLogPath = path.join(tempDir, "agent-browser-env.log");
 
   await mkdir(path.join(tempDir, ".qagent"), { recursive: true });
   await writeFile(
@@ -607,6 +854,7 @@ test("one-off run can load baseUrl and defaults from qagent.config.json in the p
       ...process.env,
       PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
       QAGENT_CAPTURE_PROMPT: capturedPromptPath,
+      QAGENT_AGENT_BROWSER_ENV_LOG_PATH: agentBrowserEnvLogPath,
     },
   });
 
@@ -618,6 +866,67 @@ test("one-off run can load baseUrl and defaults from qagent.config.json in the p
   assert.match(promptText, /TEST CREDENTIALS \(use as needed\):/);
   assert.match(promptText, /"email": "user@example\.com"/);
   assert.doesNotMatch(promptText, /secret-basic/);
+
+  const browserEnvLog = await readFile(agentBrowserEnvLogPath, "utf8");
+  assert.match(browserEnvLog, /timeout=9876 args=--session \S+ set credentials staging secret-basic/);
+  assert.match(browserEnvLog, /timeout=9876 args=--session \S+ open https:\/\/config\.example\.com/);
+});
+
+test("one-off browser pre-start uses the resolved timeout budget instead of a caller env override", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const binDir = await createClaudeStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+  const agentBrowserEnvLogPath = path.join(tempDir, "agent-browser-env.log");
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["--url", "https://example.com", "--goal", "Goal", "--timeout", "4321"],
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      AGENT_BROWSER_DEFAULT_TIMEOUT: "999999",
+      QAGENT_AGENT_BROWSER_ENV_LOG_PATH: agentBrowserEnvLogPath,
+    },
+  });
+
+  assert.equal(result.code, 0);
+
+  const browserEnvLog = await readFile(agentBrowserEnvLogPath, "utf8");
+  assert.match(browserEnvLog, /timeout=4321 args=--session \S+ open https:\/\/example\.com/);
+  assert.doesNotMatch(browserEnvLog, /timeout=999999/);
+});
+
+test("suite mode applies the timeout budget to each goal's fresh browser pre-start session", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const binDir = await createClaudeStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+  const agentBrowserEnvLogPath = path.join(tempDir, "agent-browser-env.log");
+
+  await writeFile(
+    path.join(tempDir, "goals.json"),
+    JSON.stringify([
+      { name: "headline", goal: "I can see the Example Domain headline." },
+      { name: "link", goal: "I can see the More information link." },
+    ]),
+    "utf8",
+  );
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["--url", "https://example.com", "--goals", "goals.json", "--timeout", "2468"],
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      QAGENT_AGENT_BROWSER_ENV_LOG_PATH: agentBrowserEnvLogPath,
+    },
+  });
+
+  assert.equal(result.code, 0);
+
+  const browserEnvLog = await readFile(agentBrowserEnvLogPath, "utf8");
+  const openMatches = [...browserEnvLog.matchAll(/timeout=2468 args=--session (\S+) open https:\/\/example\.com/g)];
+  assert.equal(openMatches.length, 2);
+  assert.notEqual(openMatches[0]?.[1], openMatches[1]?.[1]);
 });
 
 test("one-off run can load vendor from qagent.config.json", async (t) => {
@@ -654,6 +963,38 @@ test("one-off run can load vendor from qagent.config.json", async (t) => {
   assert.match(promptText, /RESULT_PATH/);
   assert.doesNotMatch(promptText, /You are QAgent/);
   assert.doesNotMatch(promptText, /\.qagent\//);
+});
+
+test("one-off run can load codexSandbox from qagent.config.json", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const binDir = await createCodexStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+  const capturedArgsPath = path.join(tempDir, "codex-args.json");
+
+  await writeFile(
+    path.join(tempDir, "qagent.config.json"),
+    JSON.stringify({
+      vendor: "codex",
+      codexSandbox: "danger-full-access",
+      baseUrl: "https://config.example.com",
+    }),
+    "utf8",
+  );
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["--goal", "I can see the dashboard"],
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      QAGENT_CAPTURE_CODEX_ARGS: capturedArgsPath,
+    },
+  });
+
+  assert.equal(result.code, 0);
+
+  const args = JSON.parse(await readFile(capturedArgsPath, "utf8"));
+  assert.ok(args.includes("danger-full-access"));
 });
 
 test("skills description from config is included in the prompt", async (t) => {
@@ -987,6 +1328,54 @@ test("timeout is classified as blocked instead of a Claude crash", async (t) => 
 
   const browserLog = await readFile(path.join(tempDir, "agent-browser.log"), "utf8");
   assert.match(browserLog, new RegExp(`--session ${sessionName} close`));
+});
+
+test("pre-start browser timeout still returns a setup error", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const binDir = await createClaudeStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+  const agentBrowserEnvLogPath = path.join(tempDir, "agent-browser-env.log");
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["--url", "https://github.com/haukebri/QAgent", "--goal", "Goal", "--timeout", "75"],
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      QAGENT_AGENT_BROWSER_MODE: "fail-open",
+      QAGENT_AGENT_BROWSER_STDERR: "✗ Operation timed out. The page may still be loading or the element may not exist.",
+      QAGENT_AGENT_BROWSER_ENV_LOG_PATH: agentBrowserEnvLogPath,
+    },
+  });
+
+  assert.equal(result.code, 2);
+  assert.match(result.stdout, /Browser pre-start failed: agent-browser open failed/);
+  assert.match(result.stdout, /Operation timed out/);
+
+  const browserEnvLog = await readFile(agentBrowserEnvLogPath, "utf8");
+  assert.match(browserEnvLog, /timeout=75 args=--session \S+ open https:\/\/github\.com\/haukebri\/QAgent/);
+});
+
+test("a valid result file is accepted even if the vendor process keeps running", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const binDir = await createClaudeStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["--url", "https://example.com", "--goal", "Goal", "--timeout", "1500"],
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      QAGENT_CLAUDE_DELAY_AFTER_RESULT_MS: "5000",
+      QAGENT_RESULT_STATUS: "pass",
+      QAGENT_RESULT_SUMMARY: "Result file written before shutdown",
+    },
+  });
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /\[QAgent\] PASS: Result file written before shutdown/);
+  assert.doesNotMatch(result.stdout, /Run hit the wall-clock timeout/);
 });
 
 test("skill path prints the resolved install path", async (t) => {

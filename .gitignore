@@ -6,6 +6,7 @@ dist/
 
 # QAgent runtime artifacts
 .qagent/runs/
+.qagent/real-smoke/
 .qagent/test-credentials.json
 qagent.config.json
 .claude/

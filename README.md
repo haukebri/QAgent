@@ -98,6 +98,7 @@ Why teams like it:
 - it can use credentials and app-specific context
 - it keeps browser runs in isolated temp workdirs with filtered subprocess environments
 - it can run multi-goal suites in parallel when speed matters
+- it keeps the common Codex flow simple by auto-retrying the known `agent-browser` sandbox compatibility issue
 
 ## How It Works
 
@@ -125,6 +126,7 @@ Important details:
 - `${ENV_VAR}` interpolation in credentials files is opt-in via `--allow-credential-env`
 - screenshots and a vendor-specific session log such as `claude-session.log` or `codex-session.log` are saved per run
 - browser startup happens outside the prompt for better reliability
+- Codex starts in `workspace-write` and automatically retries once with `danger-full-access` if that sandbox blocks `agent-browser`, unless you explicitly force a sandbox
 
 ## Project Mode
 
@@ -212,10 +214,13 @@ Think of `skills.md` as product context, not truth. QAgent still has to verify b
 qagent
 
 # Run one goal with Codex instead of Claude Code
-qagent --vendor codex --url https://github.com/haukebri/QAgent --goal "I can see how qagent can be used"
+qagent --vendor codex --url https://github.com/haukebri/QAgent --goal "I can see the haukebri/QAgent repository name and description"
+
+# Advanced: force a specific Codex sandbox if you need to pin the behavior
+qagent --vendor codex --codex-sandbox danger-full-access --url https://example.com --goal "I can see a headline"
 
 # Run one goal without config
-qagent --url https://github.com/haukebri/QAgent --goal "I can see how qagent can be used"
+qagent --url https://github.com/haukebri/QAgent --goal "I can see the haukebri/QAgent repository name and description"
 
 # Run goals from a specific file
 qagent --goals tests/e2e/goals.json --url https://staging.example.com
@@ -241,6 +246,10 @@ qagent --headed
 # Verify the local machine is ready
 qagent doctor
 qagent doctor --vendor codex
+
+# Run the real integration smoke suite against public pages
+npm run test:real
+npm run test:real -- --vendor claude
 
 # Install or remove the Claude Code skill
 qagent skill install
@@ -270,6 +279,33 @@ The script will:
 - push the commit and tag to `origin`
 - run `npm publish`
 
+If a release already created the version bump and git tag locally but `npm publish` failed, rerunning the same command will resume from the existing version instead of failing with `Version not changed`.
+
+## Real Smoke Tests
+
+For changes that should be exercised against the real vendor CLIs and `agent-browser`, run:
+
+```bash
+npm run test:real
+```
+
+What it does:
+
+- builds the local CLI and runs the current repo code, not your older global install
+- runs `qagent doctor` for each selected vendor by default
+- runs real one-off smoke tests against `https://example.com`
+- runs real one-off smoke tests against the public GitHub repo page at `https://github.com/haukebri/QAgent`
+- runs a real config-driven parallel suite against `https://example.com`
+- stores logs and run artifacts under `.qagent/real-smoke/<timestamp>/`
+
+Useful options:
+
+- `npm run test:real -- --vendor claude`
+- `npm run test:real -- --vendors claude,codex --headed`
+- `npm run test:real -- --skip-doctor`
+
+These runs can take a while and consume real vendor tokens.
+
 ## CLI Options
 
 | Flag | Default | Description |
@@ -281,7 +317,8 @@ The script will:
 | `--credentials <path>` | from config `credentialsFile` | Credentials file |
 | `--skills <path>` | from config `skillsFile` | Skills description file |
 | `--vendor <vendor>` | `claude` | Agent vendor (`claude` or `codex`) |
-| `--timeout <ms>` | `180000` | Wall-clock limit per goal |
+| `--codex-sandbox <mode>` | auto | Advanced: force the Codex sandbox (`workspace-write` or `danger-full-access`). Without this flag, QAgent starts with `workspace-write` and automatically retries the known `agent-browser` compatibility failure once with `danger-full-access`. |
+| `--timeout <ms>` | `180000` | Shared timeout setting for browser pre-start and vendor execution |
 | `--retries <n>` | `0` | Retry blocked runs up to `n` additional times |
 | `--allow-credential-env <names>` | - | Comma-separated env var names allowed in credentials interpolation |
 | `--parallel` | `false` | Run suite goals concurrently |
@@ -305,6 +342,8 @@ The script will:
 
 `qagent doctor` checks Node, the selected vendor CLI, `agent-browser`, and does a real headless browser startup check.
 For Claude, it also tells you whether the bundled Claude Code skill stub is installed and up to date.
+
+Note for Codex users: QAgent starts in `workspace-write` because it is safer. If current Codex builds hit the known `agent-browser` sandbox failure, QAgent automatically retries once with `danger-full-access`. `--codex-sandbox` is still available as an advanced override when you want to force one mode.
 
 ## Output
 

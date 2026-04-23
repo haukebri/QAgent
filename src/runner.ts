@@ -1,18 +1,23 @@
 import os from "node:os";
 import { spawn } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
-import { closeBrowserSession, startBrowserSession } from "./browser-session.js";
+import { closeBrowserSession, startBrowserSession, type BrowserSession } from "./browser-session.js";
 import type { Goal } from "./goals.js";
 import { buildPrompt } from "./prompt.js";
-import { readResult } from "./result.js";
+import { readResult, type Result } from "./result.js";
 import { buildSubprocessEnv, getCodexShellEnvironmentIncludeOnly } from "./subprocess-env.js";
-import { formatVendorName, getVendorSessionLogFileName, type Vendor } from "./vendor.js";
+import { formatVendorName, getVendorSessionLogFileName, type CodexSandboxMode, type Vendor } from "./vendor.js";
 
 export interface RunResult {
   status: "pass" | "fail" | "blocked";
   summary: string;
   exitCode: number;
+}
+
+interface VendorRunOutcome {
+  result: RunResult;
+  isCodexWorkspaceWriteCompatibilityFailure: boolean;
 }
 
 function toSlug(goal: string): string {
@@ -51,6 +56,7 @@ function writeLogLine(write: (chunk: string) => void, message: string): void {
 
 function getVendorSessionConfig(opts: {
   vendor: Vendor;
+  codexSandbox: CodexSandboxMode;
   prompt: string;
   sessionName: string;
   runDir: string;
@@ -76,7 +82,7 @@ function getVendorSessionConfig(opts: {
         "plugins",
         "--skip-git-repo-check",
         "--sandbox",
-        "workspace-write",
+        opts.codexSandbox,
         "--add-dir",
         opts.runDir,
         "--add-dir",
@@ -108,7 +114,6 @@ function getVendorSessionConfig(opts: {
     args: [
       "-p",
       opts.prompt,
-      "--bare",
       "--no-session-persistence",
       "--strict-mcp-config",
       "--no-chrome",
@@ -137,8 +142,74 @@ function getCrashSummary(vendor: Vendor): string {
   return vendor === "claude" ? "Claude Code crashed" : "Codex session crashed";
 }
 
+function isCodexWorkspaceWriteCompatibilityFailure(summary: string, logPath: string): boolean {
+  const normalizedSummary = summary.toLowerCase();
+  const mentionsBrowserFailure =
+    normalizedSummary.includes("browser automation") ||
+    normalizedSummary.includes("browser session failed") ||
+    normalizedSummary.includes("browser session") ||
+    normalizedSummary.includes("agent-browser") ||
+    normalizedSummary.includes("could not start or attach") ||
+    normalizedSummary.includes("daemon");
+
+  if (!mentionsBrowserFailure) {
+    return false;
+  }
+
+  try {
+    const logContents = readFileSync(logPath, "utf8");
+    if (!logContents.includes("Daemon process exited during startup with no error output.")) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+
+  return true;
+}
+
+function maybeAugmentBlockedSummaryForCodex(opts: {
+  vendor: Vendor;
+  codexSandbox: CodexSandboxMode;
+  summary: string;
+  logPath: string;
+}): { summary: string; isCodexWorkspaceWriteCompatibilityFailure: boolean } {
+  if (opts.vendor !== "codex" || opts.codexSandbox !== "workspace-write") {
+    return {
+      summary: opts.summary,
+      isCodexWorkspaceWriteCompatibilityFailure: false,
+    };
+  }
+
+  const compatibilityFailure = isCodexWorkspaceWriteCompatibilityFailure(opts.summary, opts.logPath);
+  if (!compatibilityFailure) {
+    return {
+      summary: opts.summary,
+      isCodexWorkspaceWriteCompatibilityFailure: false,
+    };
+  }
+
+  return {
+    summary: `${opts.summary} This is likely Codex's workspace-write sandbox blocking agent-browser; rerun with --codex-sandbox danger-full-access if you trust the prompt and target app.`,
+    isCodexWorkspaceWriteCompatibilityFailure: true,
+  };
+}
+
+function readCompletedResult(filePath: string): Result | null {
+  if (!existsSync(filePath)) {
+    return null;
+  }
+
+  try {
+    return readResult(filePath);
+  } catch {
+    return null;
+  }
+}
+
 async function runVendorSession(opts: {
   vendor: Vendor;
+  codexSandbox: CodexSandboxMode;
   prompt: string;
   timeout: number;
   logPath: string;
@@ -150,6 +221,7 @@ async function runVendorSession(opts: {
   screenshotDir: string;
 }): Promise<
   | { kind: "completed"; code: number | null; signal: NodeJS.Signals | null }
+  | { kind: "completed-by-result-file" }
   | { kind: "timeout" }
   | { kind: "launch-error"; error: NodeJS.ErrnoException }
 > {
@@ -170,6 +242,7 @@ async function runVendorSession(opts: {
     const sessionConfig = getVendorSessionConfig(opts);
     const result = await new Promise<
       | { kind: "completed"; code: number | null; signal: NodeJS.Signals | null }
+      | { kind: "completed-by-result-file" }
       | { kind: "timeout" }
       | { kind: "launch-error"; error: NodeJS.ErrnoException }
     >((resolve) => {
@@ -181,12 +254,15 @@ async function runVendorSession(opts: {
 
       let timedOut = false;
       let settled = false;
+      let stoppingForResultFile = false;
       let forceKillTimer: NodeJS.Timeout | undefined;
+      let resultPollTimer: NodeJS.Timeout | undefined;
       let timeoutTimer: NodeJS.Timeout | undefined;
 
       const finish = (
         value:
           | { kind: "completed"; code: number | null; signal: NodeJS.Signals | null }
+          | { kind: "completed-by-result-file" }
           | { kind: "timeout" }
           | { kind: "launch-error"; error: NodeJS.ErrnoException },
       ) => {
@@ -201,7 +277,31 @@ async function runVendorSession(opts: {
         if (forceKillTimer) {
           clearTimeout(forceKillTimer);
         }
+        if (resultPollTimer) {
+          clearInterval(resultPollTimer);
+        }
         resolve(value);
+      };
+
+      const maybeStopForResultFile = () => {
+        if (settled || stoppingForResultFile) {
+          return;
+        }
+
+        if (!readCompletedResult(opts.resultPath)) {
+          return;
+        }
+
+        stoppingForResultFile = true;
+        if (timeoutTimer) {
+          clearTimeout(timeoutTimer);
+          timeoutTimer = undefined;
+        }
+        writeLogLine(writeLog, `Detected valid result file; stopping ${sessionConfig.label}.`);
+        child.kill("SIGTERM");
+        forceKillTimer = setTimeout(() => {
+          child.kill("SIGKILL");
+        }, 5_000);
       };
 
       child.stdout?.on("data", (chunk: Buffer) => {
@@ -209,6 +309,7 @@ async function runVendorSession(opts: {
           process.stdout.write(chunk);
         }
         writeLog(chunk);
+        maybeStopForResultFile();
       });
 
       child.stderr?.on("data", (chunk: Buffer) => {
@@ -216,11 +317,14 @@ async function runVendorSession(opts: {
           process.stderr.write(chunk);
         }
         writeLog(chunk);
+        maybeStopForResultFile();
       });
 
       if (child.stdin) {
         child.stdin.end(sessionConfig.stdin ?? "");
       }
+
+      resultPollTimer = setInterval(maybeStopForResultFile, 25);
 
       child.on("error", (error) => {
         if (settled) {
@@ -233,6 +337,11 @@ async function runVendorSession(opts: {
 
       child.on("close", (code, signal) => {
         if (settled) {
+          return;
+        }
+
+        if (stoppingForResultFile) {
+          finish({ kind: "completed-by-result-file" });
           return;
         }
 
@@ -269,8 +378,74 @@ async function runVendorSession(opts: {
   }
 }
 
+async function runGoalOnce(opts: {
+  vendor: Vendor;
+  codexSandbox: CodexSandboxMode;
+  prompt: string;
+  timeout: number;
+  logPath: string;
+  sessionName: string;
+  runDir: string;
+  executionDir: string;
+  browserSocketDir: string;
+  resultPath: string;
+  screenshotDir: string;
+}): Promise<VendorRunOutcome> {
+  const session = await runVendorSession(opts);
+  const completedResult = readCompletedResult(opts.resultPath);
+
+  if (completedResult) {
+    const summary = maybeAugmentBlockedSummaryForCodex({
+      vendor: opts.vendor,
+      codexSandbox: opts.codexSandbox,
+      summary: completedResult.summary,
+      logPath: opts.logPath,
+    });
+
+    return {
+      result: {
+        status: completedResult.status,
+        summary: summary.summary,
+        exitCode: completedResult.status === "pass" ? 0 : 1,
+      },
+      isCodexWorkspaceWriteCompatibilityFailure: summary.isCodexWorkspaceWriteCompatibilityFailure,
+    };
+  }
+
+  if (session.kind === "launch-error") {
+    return {
+      result: { status: "blocked", summary: formatLaunchError(opts.vendor, session.error), exitCode: 2 },
+      isCodexWorkspaceWriteCompatibilityFailure: false,
+    };
+  }
+
+  if (session.kind === "timeout") {
+    return {
+      result: {
+        status: "blocked",
+        summary: `Run hit the wall-clock timeout after ${opts.timeout}ms`,
+        exitCode: 1,
+      },
+      isCodexWorkspaceWriteCompatibilityFailure: false,
+    };
+  }
+
+  if (session.kind === "completed" && session.code !== 0) {
+    return {
+      result: { status: "blocked", summary: getCrashSummary(opts.vendor), exitCode: 3 },
+      isCodexWorkspaceWriteCompatibilityFailure: false,
+    };
+  }
+
+  return {
+    result: { status: "blocked", summary: "Agent did not produce a valid result file", exitCode: 1 },
+    isCodexWorkspaceWriteCompatibilityFailure: false,
+  };
+}
+
 export async function runGoal(opts: {
   vendor?: Vendor;
+  codexSandbox?: CodexSandboxMode;
   url: string;
   goal: string;
   credentialsJson?: string;
@@ -280,26 +455,35 @@ export async function runGoal(opts: {
   headed?: boolean;
 }): Promise<RunResult> {
   const vendor = opts.vendor ?? "claude";
+  const codexSandbox = opts.codexSandbox ?? "workspace-write";
+  const allowImplicitCodexSandboxFallback = vendor === "codex" && opts.codexSandbox === undefined;
+  const timeout = opts.timeout ?? 180_000;
   const runDir = createRunDir(opts.goal);
 
   const resultPath = path.resolve(runDir, "result.json");
   const screenshotDir = path.resolve(runDir);
   const logPath = path.resolve(runDir, getVendorSessionLogFileName(vendor));
-  const browserSocketDir = mkdtempSync(path.join(os.tmpdir(), "qagent-ab-"));
-  const executionDir = mkdtempSync(path.join(os.tmpdir(), "qagent-exec-"));
+  const executionDirs = [mkdtempSync(path.join(os.tmpdir(), "qagent-exec-"))];
 
-  // Pre-start agent-browser session: set credentials + verify URL is reachable
-  let browserSession;
-  try {
+  const startPreparedBrowserSession = (): BrowserSession => {
+    const socketDir = mkdtempSync(path.join(os.tmpdir(), "qagent-ab-"));
     console.log("[QAgent] Starting browser session...");
-    browserSession = startBrowserSession({
+    const session = startBrowserSession({
       url: opts.url,
       basicAuth: opts.basicAuth,
       headed: opts.headed,
-      socketDir: browserSocketDir,
+      socketDir,
+      startupTimeoutMs: timeout,
     });
-    console.log(`[QAgent] Browser ready (session: ${browserSession.sessionName})`);
+    console.log(`[QAgent] Browser ready (session: ${session.sessionName})`);
     console.log("[QAgent] Starting testing. This might take a minute or two...");
+    return session;
+  };
+
+  // Pre-start agent-browser session: set credentials + verify URL is reachable
+  let browserSession: BrowserSession | undefined;
+  try {
+    browserSession = startPreparedBrowserSession();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { status: "blocked", summary: `Browser pre-start failed: ${message}`, exitCode: 2 };
@@ -315,58 +499,60 @@ export async function runGoal(opts: {
     screenshotDir,
   });
 
-  const timeout = opts.timeout ?? 180_000;
-
   try {
-    const session = await runVendorSession({
+    let runOutcome = await runGoalOnce({
       vendor,
+      codexSandbox,
       prompt,
       timeout,
       logPath,
       sessionName: browserSession.sessionName,
       runDir,
-      executionDir,
+      executionDir: executionDirs[0]!,
       browserSocketDir: browserSession.socketDir,
       resultPath,
       screenshotDir,
     });
 
-    if (session.kind === "launch-error") {
-      return { status: "blocked", summary: formatLaunchError(vendor, session.error), exitCode: 2 };
+    if (allowImplicitCodexSandboxFallback && runOutcome.isCodexWorkspaceWriteCompatibilityFailure) {
+      console.log("[QAgent] Codex workspace-write sandbox blocked agent-browser. Retrying automatically with danger-full-access...");
+      closeBrowserSession(browserSession);
+      browserSession = undefined;
+      console.log("[QAgent] Restarting browser session for Codex retry...");
+      try {
+        browserSession = startPreparedBrowserSession();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return { status: "blocked", summary: `Browser pre-start failed: ${message}`, exitCode: 2 };
+      }
+      rmSync(resultPath, { force: true });
+
+      const fallbackExecutionDir = mkdtempSync(path.join(os.tmpdir(), "qagent-exec-"));
+      executionDirs.push(fallbackExecutionDir);
+      runOutcome = await runGoalOnce({
+        vendor,
+        codexSandbox: "danger-full-access",
+        prompt,
+        timeout,
+        logPath,
+        sessionName: browserSession.sessionName,
+        runDir,
+        executionDir: fallbackExecutionDir,
+        browserSocketDir: browserSession.socketDir,
+        resultPath,
+        screenshotDir,
+      });
     }
 
-    if (session.kind === "timeout") {
-      return {
-        status: "blocked",
-        summary: `Run hit the wall-clock timeout after ${timeout}ms`,
-        exitCode: 1,
-      };
-    }
-
-    if (session.code !== 0) {
-      return { status: "blocked", summary: getCrashSummary(vendor), exitCode: 3 };
-    }
-
-    if (!existsSync(resultPath)) {
-      return { status: "blocked", summary: "Agent did not produce a valid result file", exitCode: 1 };
-    }
-
-    let result;
-    try {
-      result = readResult(resultPath);
-    } catch {
-      return { status: "blocked", summary: "Agent did not produce a valid result file", exitCode: 1 };
-    }
-
-    return {
-      status: result.status,
-      summary: result.summary,
-      exitCode: result.status === "pass" ? 0 : 1,
-    };
+    return runOutcome.result;
   } finally {
-    closeBrowserSession(browserSession);
-    if (executionDir !== runDir) {
-      rmSync(executionDir, { recursive: true, force: true });
+    if (browserSession) {
+      closeBrowserSession(browserSession);
+    }
+    for (const executionDir of executionDirs) {
+      if (executionDir !== runDir) {
+        rmSync(executionDir, { recursive: true, force: true });
+      }
     }
   }
 }
@@ -411,6 +597,7 @@ async function runGoalEntry(
   total: number,
   opts: {
     vendor: Vendor;
+    codexSandbox?: CodexSandboxMode;
     url: string;
     credentialsJson?: string;
     skillsDescription?: string;
@@ -425,6 +612,7 @@ async function runGoalEntry(
 
   const result = await runGoalWithRetries({
     vendor: opts.vendor,
+    codexSandbox: opts.codexSandbox,
     url: opts.url,
     goal: goalDef.goal,
     credentialsJson: opts.credentialsJson,
@@ -469,6 +657,7 @@ function summarize(results: GoalResult[]): SuiteResult {
 
 export async function runSuite(opts: {
   vendor?: Vendor;
+  codexSandbox?: CodexSandboxMode;
   url: string;
   goals: Goal[];
   credentialsJson?: string;
@@ -482,6 +671,7 @@ export async function runSuite(opts: {
   const vendor = opts.vendor ?? "claude";
   const shared = {
     vendor,
+    codexSandbox: opts.codexSandbox,
     url: opts.url,
     credentialsJson: opts.credentialsJson,
     skillsDescription: opts.skillsDescription,

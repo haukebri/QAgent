@@ -99,6 +99,7 @@ qagent                                  # run all goals from config
 qagent --goal "..." --url "..."         # one-off run
 qagent --goals goals.json               # explicit goals file
 qagent --vendor codex                   # run with Codex instead of Claude
+qagent --vendor codex --codex-sandbox danger-full-access  # advanced override to force a specific Codex sandbox
 qagent --retries 1                      # retry blocked runs once
 qagent --allow-credential-env FOO,BAR   # allow specific env vars in credentials templates
 qagent --parallel                       # opt into parallel multi-goal runs
@@ -122,7 +123,8 @@ qagent --version
 | `--credentials <path>` | config `credentialsFile` | Credentials file |
 | `--skills <path>` | config `skillsFile` | Skills-description file |
 | `--vendor <vendor>` | `claude` | Agent vendor (`claude` or `codex`) |
-| `--timeout <ms>` | `180000` | Wall-clock limit per goal |
+| `--codex-sandbox <mode>` | auto | Advanced: force the Codex sandbox (`workspace-write` or `danger-full-access`). Without this flag, QAgent starts with `workspace-write` and automatically retries the known `agent-browser` compatibility failure once with `danger-full-access`. |
+| `--timeout <ms>` | `180000` | Shared timeout setting for browser pre-start and vendor execution |
 | `--retries <n>` | `0` | Retry blocked runs up to `n` additional times |
 | `--allow-credential-env <names>` | — | Comma-separated env var names allowed in credentials interpolation |
 | `--parallel` | false | Run multi-goal suites in parallel |
@@ -155,6 +157,7 @@ Suite mode preserves infrastructure exit codes. If one goal hits a setup error o
 Current config fields:
 
 - `vendor`
+- `codexSandbox` for advanced Codex sandbox pinning
 - `baseUrl`
 - `goalsFile`
 - `credentialsFile`
@@ -275,8 +278,10 @@ Vendor runtime boundaries:
 
 - each vendor runs from an isolated temp execution directory instead of the project root
 - subprocess environments are filtered rather than inheriting the full parent environment
-- Claude is launched in bare mode with only the needed browser/reporting tools
-- Codex is launched in `workspace-write` mode with access limited to the run artifacts and browser session directories
+- Claude is launched in print mode with only the needed browser/reporting tools and normal local auth sources available
+- Codex starts in `workspace-write` mode with access limited to the run artifacts and browser session directories
+- if that known sandbox setup blocks `agent-browser` and the user did not explicitly pin a sandbox, QAgent retries once with `danger-full-access`
+- `--codex-sandbox` and config `codexSandbox` remain advanced overrides for forcing one mode when debugging or pinning behavior
 
 ---
 

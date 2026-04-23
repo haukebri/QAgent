@@ -9,14 +9,25 @@ export interface BrowserSession {
   socketDir: string;
 }
 
-function agentBrowser(args: string[], sessionName: string, socketDir: string, globalFlags: string[] = []): string {
+const AGENT_BROWSER_TIMEOUT_BUFFER_MS = 5_000;
+
+function agentBrowser(
+  args: string[],
+  sessionName: string,
+  socketDir: string,
+  opts: {
+    globalFlags?: string[];
+    startupTimeoutMs: number;
+  },
+): string {
   try {
-    return execFileSync("agent-browser", [...globalFlags, "--session", sessionName, ...args], {
+    return execFileSync("agent-browser", [...(opts.globalFlags ?? []), "--session", sessionName, ...args], {
       encoding: "utf8",
-      timeout: 60_000,
+      timeout: opts.startupTimeoutMs + AGENT_BROWSER_TIMEOUT_BUFFER_MS,
       stdio: ["ignore", "pipe", "pipe"],
       env: buildSubprocessEnv("agent-browser", {
         AGENT_BROWSER_SOCKET_DIR: socketDir,
+        AGENT_BROWSER_DEFAULT_TIMEOUT: String(opts.startupTimeoutMs),
       }),
     }).trim();
   } catch (error) {
@@ -30,6 +41,7 @@ export function startBrowserSession(opts: {
   basicAuth?: { username: string; password: string };
   headed?: boolean;
   socketDir: string;
+  startupTimeoutMs: number;
 }): BrowserSession {
   const sessionName = `qa-${crypto.randomBytes(4).toString("hex")}`;
   const socketDir = path.resolve(opts.socketDir);
@@ -38,11 +50,17 @@ export function startBrowserSession(opts: {
 
   // Set HTTP basic auth credentials before navigating
   if (opts.basicAuth) {
-    agentBrowser(["set", "credentials", opts.basicAuth.username, opts.basicAuth.password], sessionName, socketDir, globalFlags);
+    agentBrowser(["set", "credentials", opts.basicAuth.username, opts.basicAuth.password], sessionName, socketDir, {
+      globalFlags,
+      startupTimeoutMs: opts.startupTimeoutMs,
+    });
   }
 
   // Open the URL — this verifies the site is reachable and starts the browser
-  agentBrowser(["open", opts.url], sessionName, socketDir, globalFlags);
+  agentBrowser(["open", opts.url], sessionName, socketDir, {
+    globalFlags,
+    startupTimeoutMs: opts.startupTimeoutMs,
+  });
 
   return { sessionName, socketDir };
 }

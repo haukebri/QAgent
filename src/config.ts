@@ -1,11 +1,12 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { SUPPORTED_VENDORS } from "./vendor.js";
+import { SUPPORTED_CODEX_SANDBOXES, SUPPORTED_VENDORS } from "./vendor.js";
 import { isHttpUrl } from "./url.js";
 
 const ConfigSchema = z.object({
   vendor: z.enum(SUPPORTED_VENDORS).optional(),
+  codexSandbox: z.enum(SUPPORTED_CODEX_SANDBOXES).optional(),
   baseUrl: z
     .string()
     .url()

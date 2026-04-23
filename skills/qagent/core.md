@@ -22,6 +22,9 @@ qagent --url <url> --goal "<plain-English goal>"
 # optional vendor switch
 qagent --vendor codex --url <url> --goal "<plain-English goal>"
 
+# advanced: force a specific Codex sandbox only if you need to pin behavior
+qagent --vendor codex --codex-sandbox danger-full-access --url <url> --goal "<plain-English goal>"
+
 # optional blocked-run retry
 qagent --url <url> --goal "<plain-English goal>" --retries 1
 ```
@@ -40,6 +43,7 @@ qagent --goals <path> --url <url>
 
 Use `--parallel` only if the user explicitly asks for parallel execution.
 If the credentials file contains `${ENV_VAR}` placeholders, add `--allow-credential-env NAME1,NAME2` with the exact variable names that should be expanded.
+The same `--timeout` setting governs both the initial browser page load and the vendor run, so increase it when a real site is slower to open.
 
 ## Writing Goals
 
@@ -70,6 +74,7 @@ When the user describes a flow, draft a goal in this style before saving or runn
 5. Report each goal's verdict with a short summary and the artifact paths.
 6. On `blocked`, inspect the vendor session log to diagnose setup issues, auth problems, missing data, or browser failures.
 7. On `fail`, summarize what the app did versus what the goal expected, grounded in the captured evidence.
+8. For Codex specifically, expect QAgent to auto-retry the known `workspace-write` and `agent-browser` compatibility failure once. Only suggest `--codex-sandbox` if the user wants to force one mode explicitly.
 
 ## Exit Codes
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { cac } from "cac";
 import { loadConfig, resolveConfigPath } from "./config.js";
@@ -6,9 +7,10 @@ import { formatCredentialsForPrompt, loadCredentials } from "./credentials.js";
 import { formatSkillsDescriptionForPrompt, loadSkillsDescription } from "./skills.js";
 import type { SuiteResult } from "./runner.js";
 import { assertHttpUrl } from "./url.js";
-import { parseVendorOption, type Vendor } from "./vendor.js";
+import { parseCodexSandboxOption, parseVendorOption, type CodexSandboxMode, type Vendor } from "./vendor.js";
 
 const cli = cac("qagent");
+const packageVersion = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version as string;
 
 function findPreparseNumericOptionError(argv: string[]): string | null {
   const rules = new Map([
@@ -83,6 +85,19 @@ function resolveVendorOption(optionValue: unknown, configVendor?: Vendor): Vendo
   }
 
   return parsed ?? configVendor ?? "claude";
+}
+
+function resolveCodexSandboxOption(
+  optionValue: unknown,
+  configCodexSandbox?: CodexSandboxMode,
+): CodexSandboxMode | undefined {
+  const parsed = parseCodexSandboxOption(optionValue);
+  if (parsed === null) {
+    console.error("Error: --codex-sandbox must be one of: workspace-write, danger-full-access.");
+    process.exit(2);
+  }
+
+  return parsed ?? configCodexSandbox;
 }
 
 function printSkillCommandHelp(subcommand?: "install" | "path" | "uninstall"): void {
@@ -337,6 +352,7 @@ cli
   .option("--credentials <path>", "Path to qagent credentials file")
   .option("--skills <path>", "Path to a skills description file")
   .option("--vendor <vendor>", "Agent vendor to run (claude or codex)")
+  .option("--codex-sandbox <mode>", "Advanced: force Codex sandbox (workspace-write or danger-full-access)")
   .option("--url <url>", "Target URL")
   .option("--goal <goal>", "Single goal text")
   .option("--goals <path>", "Path to goals.json file")
@@ -358,6 +374,7 @@ cli
     }
 
     const vendor = resolveVendorOption(options.vendor, config?.vendor);
+    const codexSandbox = resolveCodexSandboxOption(options.codexSandbox, config?.codexSandbox);
 
     if (options.goal && options.goals) {
       console.error("Error: --goal and --goals are mutually exclusive.");
@@ -464,6 +481,7 @@ cli
       const { runSuite } = await import("./runner.js");
       const suite = await runSuite({
         vendor,
+        codexSandbox,
         url,
         goals,
         credentialsJson,
@@ -487,6 +505,7 @@ cli
       while (true) {
         const nextResult = await runGoal({
           vendor,
+          codexSandbox,
           url,
           goal: options.goal as string,
           credentialsJson,
@@ -510,7 +529,7 @@ cli
   });
 
 cli.help();
-cli.version("0.2.0");
+cli.version(packageVersion);
 
 const preparseError = findPreparseNumericOptionError(process.argv.slice(2));
 if (preparseError) {

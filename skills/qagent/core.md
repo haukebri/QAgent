@@ -1,6 +1,6 @@
 # QAgent
 
-QAgent is a CLI that runs prose-driven end-to-end browser QA checks against live web apps. It wraps Claude Code plus `agent-browser`, records screenshot evidence, and returns `pass`, `fail`, or `blocked` verdicts for each goal.
+QAgent is a CLI that runs prose-driven end-to-end browser QA checks against live web apps. It wraps Claude Code or Codex plus `agent-browser`, records screenshot evidence, and returns `pass`, `fail`, or `blocked` verdicts for each goal.
 
 Your job when this skill activates: help the user run QAgent, draft goals in the right style, and interpret the results honestly.
 
@@ -10,7 +10,7 @@ Before acting:
 
 1. Check that `qagent` is available (`which qagent` or `qagent --version`). If it is missing, tell the user to run `npm install -g @qagent/cli`.
 2. Check whether the current directory has `qagent.config.json`. If yes, prefer project mode. If no, use one-off mode.
-3. If anything looks off, run `qagent doctor`. It verifies Node, Claude Code, `agent-browser`, browser startup, and the installed QAgent skill stub.
+3. If anything looks off, run `qagent doctor`. It verifies Node, the selected vendor CLI, `agent-browser`, browser startup, and, for Claude, the installed QAgent skill stub.
 
 ## Invocation Modes
 
@@ -18,6 +18,9 @@ One-off mode:
 
 ```bash
 qagent --url <url> --goal "<plain-English goal>"
+
+# optional vendor switch
+qagent --vendor codex --url <url> --goal "<plain-English goal>"
 ```
 
 Project mode:
@@ -58,9 +61,9 @@ When the user describes a flow, draft a goal in this style before saving or runn
 3. Each run produces artifacts in `.qagent/runs/<timestamp>/`:
    - `result.json` for the verdict
    - screenshots for evidence
-   - `claude-session.log` for the inner session transcript
+   - `claude-session.log` or `codex-session.log` for the inner session transcript
 4. Report each goal's verdict with a short summary and the artifact paths.
-5. On `blocked`, inspect `claude-session.log` to diagnose setup issues, auth problems, missing data, or browser failures.
+5. On `blocked`, inspect the vendor session log to diagnose setup issues, auth problems, missing data, or browser failures.
 6. On `fail`, summarize what the app did versus what the goal expected, grounded in the captured evidence.
 
 ## Exit Codes
@@ -68,7 +71,7 @@ When the user describes a flow, draft a goal in this style before saving or runn
 - `0`: all goals passed
 - `1`: at least one goal failed or was blocked
 - `2`: setup error
-- `3`: Claude Code session crashed
+- `3`: selected vendor session crashed
 
 ## Project Context
 

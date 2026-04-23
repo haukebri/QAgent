@@ -104,6 +104,96 @@ node "${helperPath}" %*
   return binDir;
 }
 
+async function createCodexStub(tempDir) {
+  const binDir = path.join(tempDir, "bin");
+  const helperPath = path.join(binDir, "codex-helper.mjs");
+  await mkdir(binDir, { recursive: true });
+
+  await writeFile(
+    helperPath,
+    `import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+
+if (process.argv.includes("--version")) {
+  process.stdout.write("codex 0.0.0-test\\n");
+  process.exit(0);
+}
+
+const prompt = process.argv[2] === "exec" ? readFileSync(0, "utf8") : "";
+const mode = process.env.QAGENT_CODEX_MODE ?? "pass";
+const stdoutText = process.env.QAGENT_CODEX_STDOUT ?? "";
+const stderrText = process.env.QAGENT_CODEX_STDERR ?? "";
+const capturePromptPath = process.env.QAGENT_CAPTURE_PROMPT ?? "";
+const delayMs = Number.parseInt(process.env.QAGENT_CODEX_DELAY_MS ?? "0", 10);
+
+if (stdoutText) {
+  process.stdout.write(stdoutText);
+}
+
+if (stderrText) {
+  process.stderr.write(stderrText);
+}
+
+if (capturePromptPath) {
+  writeFileSync(capturePromptPath, prompt);
+}
+
+if (Number.isFinite(delayMs) && delayMs > 0) {
+  await delay(delayMs);
+}
+
+if (mode === "crash") {
+  process.exit(Number.parseInt(process.env.QAGENT_CODEX_EXIT_CODE ?? "17", 10));
+}
+
+if (mode === "no-result") {
+  process.exit(0);
+}
+
+const match = prompt.match(/WHEN DONE, WRITE A RESULT FILE TO:\\s*(.+)/);
+const resultPath = process.env.RESULT_PATH ?? match?.[1]?.trim() ?? "";
+if (!resultPath) {
+  console.error("Missing result path in prompt");
+  process.exit(9);
+}
+
+mkdirSync(path.dirname(resultPath), { recursive: true });
+writeFileSync(
+  resultPath,
+  JSON.stringify({
+    status: process.env.QAGENT_RESULT_STATUS ?? "pass",
+    summary: process.env.QAGENT_RESULT_SUMMARY ?? "Stubbed pass",
+    stepsTaken: 1,
+    evidence: [],
+  }),
+);
+`,
+    "utf8",
+  );
+
+  const unixWrapper = path.join(binDir, "codex");
+  await writeFile(
+    unixWrapper,
+    `#!/bin/sh
+exec node "${helperPath}" "$@"
+`,
+    "utf8",
+  );
+  await chmod(unixWrapper, 0o755);
+
+  const windowsWrapper = path.join(binDir, "codex.cmd");
+  await writeFile(
+    windowsWrapper,
+    `@echo off
+node "${helperPath}" %*
+`,
+    "utf8",
+  );
+
+  return binDir;
+}
+
 async function createAgentBrowserStub(tempDir) {
   const binDir = path.join(tempDir, "bin");
   await mkdir(binDir, { recursive: true });
@@ -262,6 +352,48 @@ test("one-off run succeeds and writes result plus session log", async (t) => {
   assert.match(browserLog, new RegExp(`--session ${sessionName} close`));
 });
 
+test("one-off run succeeds with --vendor codex and writes result plus session log", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const binDir = await createCodexStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["--vendor", "codex", "--url", "https://example.com", "--goal", "Check the homepage loads"],
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      QAGENT_CODEX_STDOUT: "stub codex stdout\n",
+      QAGENT_CODEX_STDERR: "stub codex stderr\n",
+      QAGENT_AGENT_BROWSER_LOG_PATH: path.join(tempDir, "agent-browser.log"),
+    },
+  });
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /\[QAgent\] PASS: Stubbed pass/);
+  assert.doesNotMatch(result.stdout, /stub codex stdout/);
+  assert.doesNotMatch(result.stderr, /stub codex stderr/);
+
+  const [runDir] = await getRunDirs(tempDir);
+  assert.ok(runDir, "expected one run directory to be created");
+
+  const runsRoot = path.join(tempDir, ".qagent", "runs");
+  const writtenResult = JSON.parse(await readFile(path.join(runsRoot, runDir, "result.json"), "utf8"));
+  assert.equal(writtenResult.status, "pass");
+  assert.equal(writtenResult.summary, "Stubbed pass");
+
+  const logText = await readFile(path.join(runsRoot, runDir, "codex-session.log"), "utf8");
+  assert.match(logText, /stub codex stdout/);
+  assert.match(logText, /stub codex stderr/);
+
+  const sessionName = result.stdout.match(/Browser ready \(session: ([^)]+)\)/)?.[1];
+  assert.ok(sessionName, "expected browser session name in stdout");
+
+  const browserLog = await readFile(path.join(tempDir, "agent-browser.log"), "utf8");
+  assert.match(browserLog, new RegExp(`--session ${sessionName} open https://example\\.com`));
+  assert.match(browserLog, new RegExp(`--session ${sessionName} close`));
+});
+
 test("one-off run can load baseUrl and defaults from qagent.config.json in the project root", async (t) => {
   const tempDir = await makeTempDir(t);
   const binDir = await createClaudeStub(tempDir);
@@ -314,6 +446,42 @@ test("one-off run can load baseUrl and defaults from qagent.config.json in the p
   assert.match(promptText, /TEST CREDENTIALS \(use as needed\):/);
   assert.match(promptText, /"username": "staging"/);
   assert.match(promptText, /"email": "user@example\.com"/);
+});
+
+test("one-off run can load vendor from qagent.config.json", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const binDir = await createCodexStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+  const capturedPromptPath = path.join(tempDir, "captured-prompt.txt");
+
+  await writeFile(
+    path.join(tempDir, "qagent.config.json"),
+    JSON.stringify({
+      vendor: "codex",
+      baseUrl: "https://config.example.com",
+    }),
+    "utf8",
+  );
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["--goal", "I can see the dashboard"],
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      QAGENT_CAPTURE_PROMPT: capturedPromptPath,
+    },
+  });
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /\[QAgent\] PASS: Stubbed pass/);
+
+  const promptText = await readFile(capturedPromptPath, "utf8");
+  assert.match(promptText, /TARGET URL: https:\/\/config\.example\.com/);
+  assert.match(promptText, /You are an end-to-end browser tester/);
+  assert.match(promptText, /RESULT_PATH/);
+  assert.doesNotMatch(promptText, /You are QAgent/);
+  assert.doesNotMatch(promptText, /\.qagent\//);
 });
 
 test("skills description from config is included in the prompt", async (t) => {
@@ -553,6 +721,28 @@ test("missing claude returns a setup error instead of crashing the process", asy
   const [runDir] = await getRunDirs(tempDir);
   const logText = await readFile(path.join(tempDir, ".qagent", "runs", runDir, "claude-session.log"), "utf8");
   assert.match(logText, /Claude Code CLI was not found in PATH/);
+});
+
+test("missing codex returns a setup error instead of crashing the process", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const binDir = await createAgentBrowserStub(tempDir);
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["--vendor", "codex", "--url", "https://example.com", "--goal", "Goal"],
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}/usr/bin:/bin`,
+    },
+  });
+
+  assert.equal(result.code, 2);
+  assert.match(result.stdout, /Codex CLI was not found in PATH/);
+  assert.equal(result.stderr, "");
+
+  const [runDir] = await getRunDirs(tempDir);
+  const logText = await readFile(path.join(tempDir, ".qagent", "runs", runDir, "codex-session.log"), "utf8");
+  assert.match(logText, /Codex CLI was not found in PATH/);
 });
 
 test("timeout is classified as blocked instead of a Claude crash", async (t) => {
@@ -813,6 +1003,28 @@ test("doctor succeeds when dependencies are present and agent-browser can launch
   assert.match(result.stdout, /OK\s+agent-browser/);
   assert.match(result.stdout, /OK\s+Browser launch/);
   assert.match(result.stdout, /INFO\s+Claude skill\s+Skill not installed \(run: qagent skill install\)/);
+});
+
+test("doctor succeeds with --vendor codex when dependencies are present", async (t) => {
+  const tempDir = await makeTempDir(t);
+  const codexBinDir = await createCodexStub(tempDir);
+  await createAgentBrowserStub(tempDir);
+
+  const result = await runCli({
+    cwd: tempDir,
+    args: ["doctor", "--vendor", "codex"],
+    env: {
+      ...process.env,
+      PATH: `${codexBinDir}${path.delimiter}${process.env.PATH ?? ""}`,
+    },
+  });
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /OK\s+Node\.js/);
+  assert.match(result.stdout, /OK\s+Codex/);
+  assert.match(result.stdout, /OK\s+agent-browser/);
+  assert.match(result.stdout, /OK\s+Browser launch/);
+  assert.doesNotMatch(result.stdout, /Claude skill/);
 });
 
 test("doctor fails when agent-browser cannot launch the browser", async (t) => {

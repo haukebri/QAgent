@@ -1,12 +1,13 @@
 {
   "name": "@qagent/cli",
   "version": "0.2.0",
-  "description": "End-to-end tests from prose goals. Drives Claude Code + agent-browser and records evidence.",
+  "description": "End-to-end tests from prose goals. Drives Claude Code or Codex + agent-browser and records evidence.",
   "keywords": [
     "e2e",
     "testing",
     "claude",
     "claude-code",
+    "codex",
     "ai",
     "qa",
     "agent-browser",

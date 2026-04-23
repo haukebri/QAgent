@@ -1,10 +1,12 @@
+import os from "node:os";
 import { spawn } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, mkdtempSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import path from "node:path";
 import { closeBrowserSession, startBrowserSession } from "./browser-session.js";
 import type { Goal } from "./goals.js";
 import { buildPrompt } from "./prompt.js";
 import { readResult } from "./result.js";
+import { formatVendorName, getVendorSessionLogFileName, type Vendor } from "./vendor.js";
 
 export interface RunResult {
   status: "pass" | "fail" | "blocked";
@@ -33,23 +35,95 @@ function createRunDir(goal: string): string {
   return mkdtempSync(path.join(runsRoot, `${timestamp()}-${toSlug(goal)}-`));
 }
 
-function formatLaunchError(error: NodeJS.ErrnoException): string {
+function formatLaunchError(vendor: Vendor, error: NodeJS.ErrnoException): string {
+  const vendorName = formatVendorName(vendor);
   if (error.code === "ENOENT") {
-    return "Claude Code CLI was not found in PATH";
+    return `${vendorName} CLI was not found in PATH`;
   }
 
-  return `Failed to launch Claude Code: ${error.message}`;
+  return `Failed to launch ${vendorName}: ${error.message}`;
 }
 
 function writeLogLine(write: (chunk: string) => void, message: string): void {
   write(`[QAgent] ${message}\n`);
 }
 
-async function runClaudeSession(opts: {
+function getVendorSessionConfig(opts: {
+  vendor: Vendor;
+  prompt: string;
+  sessionName: string;
+  runDir: string;
+  executionDir: string;
+  browserSocketDir: string;
+  resultPath: string;
+  screenshotDir: string;
+}): {
+  bin: string;
+  args: string[];
+  cwd?: string;
+  env: NodeJS.ProcessEnv;
+  label: string;
+  stdin?: string;
+  streamOutput: boolean;
+} {
+  if (opts.vendor === "codex") {
+    return {
+      bin: "codex",
+      args: [
+        "exec",
+        "--disable",
+        "plugins",
+        "--skip-git-repo-check",
+        "--sandbox",
+        "danger-full-access",
+        "--color",
+        "never",
+        "-o",
+        path.join(opts.runDir, "codex-last-message.txt"),
+        "-",
+      ],
+      cwd: opts.executionDir,
+      env: {
+        ...process.env,
+        AGENT_BROWSER_SESSION: opts.sessionName,
+        AGENT_BROWSER_SOCKET_DIR: opts.browserSocketDir,
+        RESULT_PATH: opts.resultPath,
+        SCREENSHOT_DIR: opts.screenshotDir,
+      },
+      label: "Codex",
+      stdin: opts.prompt,
+      streamOutput: false,
+    };
+  }
+
+  return {
+    bin: "claude",
+    args: ["-p", opts.prompt, "--strict-mcp-config", "--no-chrome", "--allowedTools", "Bash(agent-browser:*)", "Read", "Write"],
+    env: {
+      ...process.env,
+      AGENT_BROWSER_SESSION: opts.sessionName,
+      AGENT_BROWSER_SOCKET_DIR: opts.browserSocketDir,
+    },
+    label: "Claude",
+    streamOutput: true,
+  };
+}
+
+function getCrashSummary(vendor: Vendor): string {
+  return vendor === "claude" ? "Claude Code crashed" : "Codex session crashed";
+}
+
+async function runVendorSession(opts: {
+  vendor: Vendor;
   prompt: string;
   timeout: number;
   logPath: string;
   sessionName: string;
+  runDir: string;
+  executionDir: string;
+  browserSocketDir: string;
+  resultPath: string;
+  screenshotDir: string;
 }): Promise<
   | { kind: "completed"; code: number | null; signal: NodeJS.Signals | null }
   | { kind: "timeout" }
@@ -57,7 +131,7 @@ async function runClaudeSession(opts: {
 > {
   const logStream = createWriteStream(opts.logPath, { flags: "a" });
   logStream.on("error", (error) => {
-    process.stderr.write(`[QAgent] Failed to write claude-session.log: ${error.message}\n`);
+    process.stderr.write(`[QAgent] Failed to write ${path.basename(opts.logPath)}: ${error.message}\n`);
   });
 
   const writeLog = (chunk: string | Buffer) => {
@@ -69,19 +143,17 @@ async function runClaudeSession(opts: {
   };
 
   try {
+    const sessionConfig = getVendorSessionConfig(opts);
     const result = await new Promise<
       | { kind: "completed"; code: number | null; signal: NodeJS.Signals | null }
       | { kind: "timeout" }
       | { kind: "launch-error"; error: NodeJS.ErrnoException }
     >((resolve) => {
-      const child = spawn(
-        "claude",
-        ["-p", opts.prompt, "--strict-mcp-config", "--no-chrome", "--allowedTools", "Bash(agent-browser:*)", "Read", "Write"],
-        {
-          stdio: ["ignore", "pipe", "pipe"],
-          env: { ...process.env, AGENT_BROWSER_SESSION: opts.sessionName },
-        },
-      );
+      const child = spawn(sessionConfig.bin, sessionConfig.args, {
+        cwd: sessionConfig.cwd,
+        stdio: ["pipe", "pipe", "pipe"],
+        env: sessionConfig.env,
+      });
 
       let timedOut = false;
       let settled = false;
@@ -109,21 +181,29 @@ async function runClaudeSession(opts: {
       };
 
       child.stdout?.on("data", (chunk: Buffer) => {
-        process.stdout.write(chunk);
+        if (sessionConfig.streamOutput) {
+          process.stdout.write(chunk);
+        }
         writeLog(chunk);
       });
 
       child.stderr?.on("data", (chunk: Buffer) => {
-        process.stderr.write(chunk);
+        if (sessionConfig.streamOutput) {
+          process.stderr.write(chunk);
+        }
         writeLog(chunk);
       });
+
+      if (child.stdin) {
+        child.stdin.end(sessionConfig.stdin ?? "");
+      }
 
       child.on("error", (error) => {
         if (settled) {
           return;
         }
 
-        writeLogLine(writeLog, formatLaunchError(error));
+        writeLogLine(writeLog, formatLaunchError(opts.vendor, error));
         finish({ kind: "launch-error", error });
       });
 
@@ -138,7 +218,10 @@ async function runClaudeSession(opts: {
         }
 
         if (code !== 0) {
-          writeLogLine(writeLog, `Claude exited unexpectedly with code ${code ?? "null"}${signal ? ` (signal ${signal})` : ""}.`);
+          writeLogLine(
+            writeLog,
+            `${sessionConfig.label} exited unexpectedly with code ${code ?? "null"}${signal ? ` (signal ${signal})` : ""}.`,
+          );
         }
 
         finish({ kind: "completed", code, signal });
@@ -146,7 +229,7 @@ async function runClaudeSession(opts: {
 
       timeoutTimer = setTimeout(() => {
         timedOut = true;
-        writeLogLine(writeLog, `Timeout reached after ${opts.timeout}ms; stopping Claude.`);
+        writeLogLine(writeLog, `Timeout reached after ${opts.timeout}ms; stopping ${sessionConfig.label}.`);
         child.kill("SIGTERM");
         forceKillTimer = setTimeout(() => {
           child.kill("SIGKILL");
@@ -163,6 +246,7 @@ async function runClaudeSession(opts: {
 }
 
 export async function runGoal(opts: {
+  vendor?: Vendor;
   url: string;
   goal: string;
   credentialsJson?: string;
@@ -171,11 +255,14 @@ export async function runGoal(opts: {
   timeout?: number;
   headed?: boolean;
 }): Promise<RunResult> {
+  const vendor = opts.vendor ?? "claude";
   const runDir = createRunDir(opts.goal);
 
   const resultPath = path.resolve(runDir, "result.json");
   const screenshotDir = path.resolve(runDir);
-  const logPath = path.resolve(runDir, "claude-session.log");
+  const logPath = path.resolve(runDir, getVendorSessionLogFileName(vendor));
+  const browserSocketDir = mkdtempSync(path.join(os.tmpdir(), "qagent-ab-"));
+  const executionDir = vendor === "codex" ? mkdtempSync(path.join(os.tmpdir(), "qa-exec-")) : runDir;
 
   // Pre-start agent-browser session: set credentials + verify URL is reachable
   let browserSession;
@@ -185,14 +272,17 @@ export async function runGoal(opts: {
       url: opts.url,
       basicAuth: opts.basicAuth,
       headed: opts.headed,
+      socketDir: browserSocketDir,
     });
     console.log(`[QAgent] Browser ready (session: ${browserSession.sessionName})`);
+    console.log("[QAgent] Starting testing. This might take a minute or two...");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { status: "blocked", summary: `Browser pre-start failed: ${message}`, exitCode: 2 };
   }
 
   const prompt = buildPrompt({
+    vendor,
     url: opts.url,
     goal: opts.goal,
     credentialsJson: opts.credentialsJson ?? "None provided.",
@@ -204,15 +294,21 @@ export async function runGoal(opts: {
   const timeout = opts.timeout ?? 180_000;
 
   try {
-    const session = await runClaudeSession({
+    const session = await runVendorSession({
+      vendor,
       prompt,
       timeout,
       logPath,
       sessionName: browserSession.sessionName,
+      runDir,
+      executionDir,
+      browserSocketDir: browserSession.socketDir,
+      resultPath,
+      screenshotDir,
     });
 
     if (session.kind === "launch-error") {
-      return { status: "blocked", summary: formatLaunchError(session.error), exitCode: 2 };
+      return { status: "blocked", summary: formatLaunchError(vendor, session.error), exitCode: 2 };
     }
 
     if (session.kind === "timeout") {
@@ -224,7 +320,7 @@ export async function runGoal(opts: {
     }
 
     if (session.code !== 0) {
-      return { status: "blocked", summary: "Claude Code crashed", exitCode: 3 };
+      return { status: "blocked", summary: getCrashSummary(vendor), exitCode: 3 };
     }
 
     if (!existsSync(resultPath)) {
@@ -245,6 +341,9 @@ export async function runGoal(opts: {
     };
   } finally {
     closeBrowserSession(browserSession);
+    if (executionDir !== runDir) {
+      rmSync(executionDir, { recursive: true, force: true });
+    }
   }
 }
 
@@ -269,6 +368,7 @@ async function runGoalEntry(
   index: number,
   total: number,
   opts: {
+    vendor: Vendor;
     url: string;
     credentialsJson?: string;
     skillsDescription?: string;
@@ -281,6 +381,7 @@ async function runGoalEntry(
   console.log(`[QAgent] "${goalDef.goal}"\n`);
 
   const result = await runGoal({
+    vendor: opts.vendor,
     url: opts.url,
     goal: goalDef.goal,
     credentialsJson: opts.credentialsJson,
@@ -324,6 +425,7 @@ function summarize(results: GoalResult[]): SuiteResult {
 }
 
 export async function runSuite(opts: {
+  vendor?: Vendor;
   url: string;
   goals: Goal[];
   credentialsJson?: string;
@@ -333,7 +435,9 @@ export async function runSuite(opts: {
   parallel?: boolean;
   headed?: boolean;
 }): Promise<SuiteResult> {
+  const vendor = opts.vendor ?? "claude";
   const shared = {
+    vendor,
     url: opts.url,
     credentialsJson: opts.credentialsJson,
     skillsDescription: opts.skillsDescription,

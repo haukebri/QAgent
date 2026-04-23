@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import { getInstalledSkillStatus } from "./skill-install.js";
+import { formatVendorName, type Vendor } from "./vendor.js";
 
 interface CheckResult {
   name: string;
@@ -127,7 +128,29 @@ function checkClaudeSkill(): CheckResult {
   };
 }
 
-export function runDoctor(): boolean {
+function checkVendorCli(vendor: Vendor): CheckResult {
+  const vendorPath = which(vendor);
+  if (vendorPath) {
+    const version = getVersion(vendor, "--version");
+    return {
+      name: formatVendorName(vendor),
+      status: "ok",
+      message: version ?? vendorPath,
+    };
+  }
+
+  return {
+    name: formatVendorName(vendor),
+    status: "missing",
+    message:
+      vendor === "claude"
+        ? "not found — install: https://docs.anthropic.com/en/docs/claude-code"
+        : "not found — install Codex CLI and ensure `codex` is in PATH",
+  };
+}
+
+export function runDoctor(opts?: { vendor?: Vendor }): boolean {
+  const vendor = opts?.vendor ?? "claude";
   const checks: CheckResult[] = [];
 
   const nodeVersion = process.versions.node;
@@ -138,21 +161,7 @@ export function runDoctor(): boolean {
     message: nodeMajor >= 20 ? `v${nodeVersion}` : `v${nodeVersion} (need >= 20)`,
   });
 
-  const claudePath = which("claude");
-  if (claudePath) {
-    const version = getVersion("claude", "--version");
-    checks.push({
-      name: "Claude Code",
-      status: "ok",
-      message: version ?? claudePath,
-    });
-  } else {
-    checks.push({
-      name: "Claude Code",
-      status: "missing",
-      message: "not found — install: https://docs.anthropic.com/en/docs/claude-code",
-    });
-  }
+  checks.push(checkVendorCli(vendor));
 
   const agentBrowserPath = which("agent-browser");
   if (agentBrowserPath) {
@@ -176,7 +185,9 @@ export function runDoctor(): boolean {
     });
   }
 
-  checks.push(checkClaudeSkill());
+  if (vendor === "claude") {
+    checks.push(checkClaudeSkill());
+  }
 
   console.log("\n  QAgent Doctor\n");
   let allOk = true;

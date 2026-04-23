@@ -2,7 +2,7 @@
 
 **Write a test goal in plain English. QAgent runs it against your app and tells you if it actually works.**
 
-QAgent is a CLI for AI-native QA. It uses Claude Code plus `agent-browser`, records screenshots, and returns a simple verdict: `pass`, `fail`, or `blocked`.
+QAgent is a CLI for AI-native QA. It uses Claude Code or Codex plus `agent-browser`, records screenshots, and returns a simple verdict: `pass`, `fail`, or `blocked`.
 
 This repo is intentionally focused:
 
@@ -28,6 +28,7 @@ That is enough to prove the full loop works without needing a local app first.
 ## Claude Code Skill
 
 QAgent also ships a Claude Code skill so new Claude sessions can auto-trigger on requests like "verify the login flow" or "smoke test this app."
+This skill distribution is Claude-specific; the run engine itself can use either Claude or Codex.
 
 If you want the ecosystem-native install flow, use the open skills CLI:
 
@@ -104,9 +105,9 @@ You write a goal
     ->
 QAgent starts a fresh browser session
     ->
-QAgent opens your app before Claude starts
+QAgent opens your app before the agent starts
     ->
-Claude uses agent-browser to verify the flow
+The selected agent uses agent-browser to verify the flow
     ->
 QAgent reads result.json and saves screenshots
     ->
@@ -118,7 +119,7 @@ Important details:
 - each goal gets a fresh browser session
 - HTTP basic auth can be applied before page load
 - app login credentials can be passed in
-- screenshots and `claude-session.log` are saved per run
+- screenshots and a vendor-specific session log such as `claude-session.log` or `codex-session.log` are saved per run
 - browser startup happens outside the prompt for better reliability
 
 ## Project Mode
@@ -129,6 +130,7 @@ Once you want more than one ad-hoc test, add project-local files.
 
 ```json
 {
+  "vendor": "claude",
   "baseUrl": "https://staging.example.com",
   "goalsFile": "goals.json",
   "credentialsFile": ".qagent/test-credentials.json",
@@ -199,6 +201,9 @@ Think of `skills.md` as product context, not truth. QAgent still has to verify b
 # Run all goals from config
 qagent
 
+# Run one goal with Codex instead of Claude Code
+qagent --vendor codex --url https://github.com/haukebri/QAgent --goal "I can see how qagent can be used"
+
 # Run one goal without config
 qagent --url https://github.com/haukebri/QAgent --goal "I can see how qagent can be used"
 
@@ -219,6 +224,7 @@ qagent --headed
 
 # Verify the local machine is ready
 qagent doctor
+qagent doctor --vendor codex
 
 # Install or remove the Claude Code skill
 qagent skill install
@@ -239,6 +245,7 @@ qagent skills get core
 | `--config <path>` | `./qagent.config.json` | Config file |
 | `--credentials <path>` | from config `credentialsFile` | Credentials file |
 | `--skills <path>` | from config `skillsFile` | Skills description file |
+| `--vendor <vendor>` | `claude` | Agent vendor (`claude` or `codex`) |
 | `--timeout <ms>` | `180000` | Wall-clock limit per goal |
 | `--parallel` | `false` | Run suite goals concurrently |
 | `--headed` | `false` | Run Chrome visibly for debugging |
@@ -250,17 +257,17 @@ qagent skills get core
 | `0` | All goals passed |
 | `1` | At least one goal failed or was blocked |
 | `2` | Setup error |
-| `3` | Claude Code session crashed |
+| `3` | The selected agent session crashed |
 
 ## Requirements
 
 - Node.js >= 20
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) in `PATH`, logged in
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) in `PATH`, logged in, or Codex CLI in `PATH`, depending on the selected vendor
 - [`agent-browser`](https://www.npmjs.com/package/agent-browser) in `PATH`
 - Chrome installed for `agent-browser` via `agent-browser install`
 
-`qagent doctor` checks Node, `claude`, `agent-browser`, and does a real headless browser startup check.
-It also tells you whether the bundled Claude Code skill stub is installed and up to date.
+`qagent doctor` checks Node, the selected vendor CLI, `agent-browser`, and does a real headless browser startup check.
+For Claude, it also tells you whether the bundled Claude Code skill stub is installed and up to date.
 
 ## Output
 
@@ -271,7 +278,7 @@ Each goal creates a run directory under `.qagent/runs/`:
   ├── 01-login.png
   ├── 02-dashboard.png
   ├── result.json
-  └── claude-session.log
+  └── claude-session.log   # or codex-session.log
 ```
 
 ## Philosophy

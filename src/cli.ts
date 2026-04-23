@@ -5,6 +5,7 @@ import { loadConfig, resolveConfigPath } from "./config.js";
 import { formatCredentialsForPrompt, loadCredentials } from "./credentials.js";
 import { formatSkillsDescriptionForPrompt, loadSkillsDescription } from "./skills.js";
 import type { SuiteResult } from "./runner.js";
+import { parseVendorOption, type Vendor } from "./vendor.js";
 
 const cli = cac("qagent");
 
@@ -40,6 +41,16 @@ function parsePositiveIntegerOption(value: unknown): number | null | undefined {
   }
 
   return parsed;
+}
+
+function resolveVendorOption(optionValue: unknown, configVendor?: Vendor): Vendor {
+  const parsed = parseVendorOption(optionValue);
+  if (parsed === null) {
+    console.error("Error: --vendor must be one of: claude, codex.");
+    process.exit(2);
+  }
+
+  return parsed ?? configVendor ?? "claude";
 }
 
 function printSkillCommandHelp(subcommand?: "install" | "path" | "uninstall"): void {
@@ -259,11 +270,27 @@ function printSummaryTable(suite: SuiteResult): void {
 }
 
 // ── doctor ────────────────────────────────────────────────────────────
-cli.command("doctor", "Check that all dependencies are installed").action(async () => {
-  const { runDoctor } = await import("./doctor.js");
-  const ok = runDoctor();
-  process.exit(ok ? 0 : 1);
-});
+cli
+  .command("doctor", "Check that all dependencies are installed")
+  .option("--config <path>", "Path to qagent config file")
+  .option("--vendor <vendor>", "Agent vendor to check (claude or codex)")
+  .action(async (options: Record<string, unknown>) => {
+    const configPath = typeof options.config === "string" ? options.config : undefined;
+    let config;
+    try {
+      config = loadConfig(configPath);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Error: ${message}`);
+      process.exit(2);
+    }
+
+    const vendor = resolveVendorOption(options.vendor, config?.vendor);
+
+    const { runDoctor } = await import("./doctor.js");
+    const ok = runDoctor({ vendor });
+    process.exit(ok ? 0 : 1);
+  });
 
 // ── skill ─────────────────────────────────────────────────────────────
 cli.command("skill install", "Install the QAgent Claude Code skill into the user's Claude config directory");
@@ -277,6 +304,7 @@ cli
   .option("--config <path>", "Path to qagent config file")
   .option("--credentials <path>", "Path to qagent credentials file")
   .option("--skills <path>", "Path to a skills description file")
+  .option("--vendor <vendor>", "Agent vendor to run (claude or codex)")
   .option("--url <url>", "Target URL")
   .option("--goal <goal>", "Single goal text")
   .option("--goals <path>", "Path to goals.json file")
@@ -295,6 +323,8 @@ cli
       console.error(`Error: ${message}`);
       process.exit(2);
     }
+
+    const vendor = resolveVendorOption(options.vendor, config?.vendor);
 
     if (options.goal && options.goals) {
       console.error("Error: --goal and --goals are mutually exclusive.");
@@ -384,6 +414,7 @@ cli
 
       const { runSuite } = await import("./runner.js");
       const suite = await runSuite({
+        vendor,
         url,
         goals,
         credentialsJson,
@@ -401,6 +432,7 @@ cli
     // Single-goal mode
     const { runGoal } = await import("./runner.js");
     const result = await runGoal({
+      vendor,
       url,
       goal: options.goal as string,
       credentialsJson,

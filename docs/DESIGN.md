@@ -1,8 +1,8 @@
 # QAgent — Design
 
-A CLI that runs prose-written end-to-end goals against a live web app using Claude Code and `agent-browser`, produces screenshot evidence, and returns a pass, fail, or blocked verdict.
+A CLI that runs prose-written end-to-end goals against a live web app using Claude Code or Codex plus `agent-browser`, produces screenshot evidence, and returns a pass, fail, or blocked verdict.
 
-QAgent is intentionally narrow: it is a test runner wrapper around Claude Code, not a broader automation platform and not a Playwright generator.
+QAgent is intentionally narrow: it is a test runner wrapper around a coding-agent CLI, not a broader automation platform and not a Playwright generator.
 
 ---
 
@@ -35,6 +35,7 @@ The core product bet is that many UI checks are easier to describe in prose than
 - one-off runs with `--goal`
 - multi-goal runs via `goals.json`
 - optional parallel execution with `--parallel`
+- vendor selection via `--vendor claude|codex` (Claude default)
 - fresh browser session per goal
 - deterministic browser startup before the model begins
 - HTTP basic auth support
@@ -51,7 +52,6 @@ The core product bet is that many UI checks are easier to describe in prose than
 - prompt-template editing or prompt file overrides
 - HTML report generation
 - watch mode
-- multi-provider support
 - shared browser/session state between goals
 
 If Playwright generation returns later, it should live in a separate tool that depends on QAgent rather than inside this CLI.
@@ -68,20 +68,20 @@ qagent CLI (Node/TypeScript)
   │    ├─ mkdir .qagent/runs/<timestamp>-<goal>-<unique>/
   │    ├─ start agent-browser session
   │    ├─ apply HTTP basic auth (if configured)
-  │    ├─ open the target URL before Claude starts
+  │    ├─ open the target URL before the agent starts
   │    ├─ render built-in prompt with goal context
-  │    ├─ spawn: claude -p "<prompt>" --allowedTools Bash(agent-browser:*) Read Write
-  │    ├─ Claude drives the already-open browser and writes result.json
+  │    ├─ spawn: selected vendor CLI with the built-in prompt
+  │    ├─ the agent drives the already-open browser and writes result.json
   │    ├─ parent reads result.json and classifies the result
-  │    └─ parent writes claude-session.log for debugging
+  │    └─ parent writes a vendor-specific session log for debugging
   └─ print summary, exit 0 / 1 / 2 / 3
 ```
 
-### Why Browser Sessions Start Before Claude
+### Why Browser Sessions Start Before The Agent
 
 - basic auth is deterministic instead of left to the model
 - unreachable URLs fail before spending AI time
-- Claude starts from a real loaded page
+- the agent starts from a real loaded page
 - this is a better fit for CI-style CLI behavior
 
 ---
@@ -92,6 +92,7 @@ qagent CLI (Node/TypeScript)
 qagent                                  # run all goals from config
 qagent --goal "..." --url "..."         # one-off run
 qagent --goals goals.json               # explicit goals file
+qagent --vendor codex                   # run with Codex instead of Claude
 qagent --parallel                       # opt into parallel multi-goal runs
 qagent --headed                         # visible browser window
 qagent doctor                           # verify local dependencies
@@ -112,6 +113,7 @@ qagent --version
 | `--config <path>` | `./qagent.config.json` | Config file |
 | `--credentials <path>` | config `credentialsFile` | Credentials file |
 | `--skills <path>` | config `skillsFile` | Skills-description file |
+| `--vendor <vendor>` | `claude` | Agent vendor (`claude` or `codex`) |
 | `--timeout <ms>` | `180000` | Wall-clock limit per goal |
 | `--parallel` | false | Run multi-goal suites in parallel |
 | `--headed` | false | Run Chrome visibly for debugging |
@@ -121,9 +123,9 @@ qagent --version
 - `0` — all goals passed
 - `1` — at least one goal failed or was blocked
 - `2` — setup error (invalid config, missing files, missing dependency, browser pre-start failure)
-- `3` — Claude Code session crashed
+- `3` — selected vendor session crashed
 
-Suite mode preserves infrastructure exit codes. If one goal hits a setup error or Claude crash, the suite exit code reflects that.
+Suite mode preserves infrastructure exit codes. If one goal hits a setup error or vendor crash, the suite exit code reflects that.
 
 ---
 
@@ -131,6 +133,7 @@ Suite mode preserves infrastructure exit codes. If one goal hits a setup error o
 
 ```json
 {
+  "vendor": "claude",
   "baseUrl": "https://staging.example.com",
   "goalsFile": "goals.json",
   "credentialsFile": ".qagent/test-credentials.json",
@@ -141,6 +144,7 @@ Suite mode preserves infrastructure exit codes. If one goal hits a setup error o
 
 Current config fields:
 
+- `vendor`
 - `baseUrl`
 - `goalsFile`
 - `credentialsFile`
@@ -206,7 +210,7 @@ Notes:
 
 - env-var interpolation is supported
 - `basicAuth` is applied before page load
-- user credentials are still passed into Claude for in-app login steps
+- user credentials are still passed into the selected agent for in-app login steps
 
 ---
 
@@ -260,7 +264,7 @@ The prompt should keep steering focused on:
 
 ## 10. Result Contract: `result.json`
 
-Written by Claude during the run. Read by the parent CLI.
+Written by the selected agent during the run. Read by the parent CLI.
 
 ```json
 {
@@ -297,7 +301,7 @@ project-root/
             ├── 01-login.png
             ├── 02-dashboard.png
             ├── result.json
-            └── claude-session.log
+            └── claude-session.log      # or codex-session.log
 ```
 
 ---
@@ -309,10 +313,10 @@ project-root/
 Current checks:
 
 - Node.js version
-- `claude` in `PATH`
+- selected vendor CLI in `PATH`
 - `agent-browser` in `PATH`
 - a real headless `agent-browser open about:blank` launch
-- bundled Claude Code skill install status
+- for Claude, bundled skill install status
 
 This command should stay lightweight and fast.
 

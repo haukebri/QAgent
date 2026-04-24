@@ -1,6 +1,7 @@
 # playwright usage
 
 Version: 1.59.1. Install:
+
 ```
 npm install playwright
 npx playwright install chromium
@@ -21,6 +22,7 @@ const snapshot = await page.locator('body').ariaSnapshot({ mode: 'ai' });
 ```
 
 Returns YAML like:
+
 ```yaml
 - banner:
   - heading "Example Domain" [ref=e2]
@@ -30,6 +32,7 @@ Returns YAML like:
 ```
 
 Properties:
+
 - refs (`e1`, `e2`, ...) are assigned per snapshot call
 - does not wait for elements, snapshots what is there now
 - includes iframe contents
@@ -46,6 +49,7 @@ await page.locator(`aria-ref=${ref}`).press(key);
 ```
 
 Page-level actions:
+
 ```js
 await page.goto(url);
 await page.waitForURL(pattern);
@@ -60,6 +64,7 @@ await page.getByRole('heading', { name: 'Dashboard' }).isVisible();
 ```
 
 For stronger anchor points later:
+
 ```js
 await expect(page.locator('main')).toMatchAriaSnapshot(template);
 ```
@@ -67,6 +72,7 @@ await expect(page.locator('main')).toMatchAriaSnapshot(template);
 ### recorder signals
 
 Cheap to pull, useful for traces:
+
 ```js
 page.consoleMessages();
 page.pageErrors();

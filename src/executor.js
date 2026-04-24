@@ -21,7 +21,12 @@ const SYSTEM_PROMPT =
   'Wait first, then re-check.\n\n' +
   'Pick "done" when the goal is clearly complete — include a "summary" that answers any question the goal asked for. ' +
   'Pick "fail" when the goal is clearly impossible on this page/app — include a clear "reason". ' +
-  "Don't fabricate: if you cannot literally verify what the goal asks for, use \"fail\".";
+  "Don't fabricate: if you cannot literally verify what the goal asks for, use \"fail\".\n\n" +
+  'Element heuristics: prefer refs labelled `link` (which show a `- /url: …` line) or ' +
+  '`button`, `textbox`, `menuitem`. A `generic [cursor=pointer]` span is often a ' +
+  'dropdown / mega-menu trigger that expands inline rather than navigating — if you ' +
+  'click one and see "page grew +NNN chars" without a URL change, new menu items ' +
+  'appeared in the snapshot; look for them instead of re-clicking the same ref.';
 
 export async function runTodo(page, goal, model, apiKey, maxTurns = 20, verifierModel = null) {
   const t0 = Date.now();
@@ -40,10 +45,23 @@ export async function runTodo(page, goal, model, apiKey, maxTurns = 20, verifier
   let fatalError = null;
   let finalSnapshot = '';
 
+  let prevSnapshotLen = null;
+
   while (turns < maxTurns) {
     turns++;
     try {
       const snapshot = await observe(page);
+      // Retroactively annotate the previous action with the DOM effect it had:
+      // the delta in snapshot size between before-action and after-action.
+      // This lets the LLM distinguish clicks that mutated the page (opened a
+      // dropdown, loaded content) from clicks that were true no-ops.
+      if (prevSnapshotLen !== null && history.length > 0) {
+        const last = history[history.length - 1];
+        if (last.action?.action !== 'wait') {
+          last.snapshotDelta = snapshot.length - prevSnapshotLen;
+        }
+      }
+      prevSnapshotLen = snapshot.length;
       finalSnapshot = snapshot;
       const url = page.url();
 
@@ -67,27 +85,30 @@ export async function runTodo(page, goal, model, apiKey, maxTurns = 20, verifier
       if ((action.action === 'click' || action.action === 'fill') && action.ref) {
         if (!snapshot.includes(`[ref=${action.ref}]`)) {
           lastError = `ref ${action.ref} is not present in the current snapshot; pick a ref from the latest snapshot above`;
-          history.push({ turn: turns, action, url, error: lastError });
+          history.push({ turn: turns, atMs: Date.now() - t0, action, url, error: lastError });
           continue;
         }
       }
 
-      const entry = { turn: turns, action };
+      const entry = { turn: turns, atMs: Date.now() - t0, action };
       if (action.action === 'click' || action.action === 'fill') {
         const target = labelForRef(snapshot, action.ref);
         if (target) entry.target = target;
       }
+      const tAction = Date.now();
       try {
         if (action.action === 'navigate') await navigate(page, action.url);
         else if (action.action === 'click') await click(page, action.ref);
         else if (action.action === 'fill') await fill(page, action.ref, action.value);
         else if (action.action === 'wait') await page.waitForTimeout(action.ms ?? 1000);
         else throw new Error(`unknown action: ${action.action}`);
+        entry.ms = Date.now() - tAction;
         entry.url = page.url();
         history.push(entry);
         lastError = null;
       } catch (err) {
         lastError = err.message.split('\n')[0];
+        entry.ms = Date.now() - tAction;
         entry.url = page.url();
         entry.error = lastError;
         history.push(entry);
@@ -156,10 +177,24 @@ function labelForRef(snapshot, ref) {
   return name ? `${role} '${name}'` : role;
 }
 
+function formatHistoryEntry(h) {
+  const act = JSON.stringify(h.action);
+  if (h.error) return `${act} -> error: ${h.error}`;
+  const bits = [];
+  if (h.url) bits.push(`url=${h.url}`);
+  if (typeof h.snapshotDelta === 'number') {
+    const d = h.snapshotDelta;
+    if (d > 200) bits.push(`page grew +${d} chars (new content appeared)`);
+    else if (d < -200) bits.push(`page shrunk ${d} chars (content removed)`);
+    else bits.push('page unchanged');
+  }
+  return bits.length ? `${act} -> ${bits.join('; ')}` : act;
+}
+
 async function askNextAction({ agent, goal, url, snapshot, history, lastError }) {
   agent.reset();
   const historyBlock = history.length
-    ? `\n\nRecent actions (most recent last):\n${history.slice(-HISTORY_WINDOW).map((h, i) => `  ${i + 1}. ${JSON.stringify(h.action)}${h.error ? ` -> error: ${h.error}` : ''}`).join('\n')}\n`
+    ? `\n\nRecent actions (most recent last):\n${history.slice(-HISTORY_WINDOW).map((h, i) => `  ${i + 1}. ${formatHistoryEntry(h)}`).join('\n')}\n`
     : '';
   const errorBlock = lastError ? `\n\nPrevious action failed: ${lastError}\nAdjust your choice.\n` : '';
   await agent.prompt(

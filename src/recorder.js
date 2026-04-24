@@ -16,7 +16,6 @@ export async function record(goal, modelId, verifierModelId, result, outDir = 'r
     evidence: result.evidence,
     llmVerdict: result.llmVerdict,
     finalUrl: result.finalUrl,
-    finalSnapshot: result.finalSnapshot,
     stats: {
       turns: result.turns,
       elapsedMs: result.elapsedMs,

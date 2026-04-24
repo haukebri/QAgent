@@ -1,4 +1,8 @@
-const ACTION_TIMEOUT_MS = 10000;
+// Short actionability timeout — Playwright's own check (visible, stable,
+// receives events, enabled) doubles as our blocked-click detector. 1.5s is
+// enough to let transient states (animations, fade-outs) settle without
+// burning turns when an overlay genuinely won't move.
+const ACTION_TIMEOUT_MS = 1500;
 const NAVIGATE_TIMEOUT_MS = 15000;
 const OBSERVE_NETWORKIDLE_TIMEOUT_MS = 5000;
 
@@ -15,50 +19,71 @@ export async function observe(page) {
   return await page.locator('body').ariaSnapshot({ mode: 'ai' });
 }
 
-// Fast-fail pre-check: without this, a click on an element covered by a cookie
-// banner / ad / newsletter modal would wait the full ACTION_TIMEOUT_MS for
-// Playwright's actionability poll to give up. Here we scroll the element into
-// view and ask `elementFromPoint` at the target's centre. If the topmost
-// element at that point isn't the target (or a descendant), the click would
-// hit the overlay — we surface that immediately so the executor/LLM can react
-// (dismiss the banner, try a different element) instead of burning 10s.
+// When an action fails, name the element that was on top at the target's
+// centre so the LLM can pattern-match the blocker (#usercentrics-root,
+// #onetrust-banner-sdk, newsletter modals, ad overlays, …) and react
+// accordingly. Pierces shadow DOM so buttons inside consent banners are
+// traced back to their recognizable host in the main document.
 async function describeBlocker(locator) {
   try {
     return await locator.evaluate(el => {
-      el.scrollIntoView({ block: 'center', inline: 'center' });
       const r = el.getBoundingClientRect();
       if (r.width === 0 || r.height === 0) return null;
       const cx = r.x + r.width / 2;
       const cy = r.y + r.height / 2;
       if (cx < 0 || cy < 0 || cx >= window.innerWidth || cy >= window.innerHeight) return null;
-      const top = document.elementFromPoint(cx, cy);
-      if (!top || top === el || el.contains(top)) return null;
-      const id = top.id ? `#${top.id}` : '';
+
+      let top = document.elementFromPoint(cx, cy);
+      while (top && top.shadowRoot) {
+        const inner = top.shadowRoot.elementFromPoint(cx, cy);
+        if (!inner || inner === top) break;
+        top = inner;
+      }
+      if (!top) return null;
+
+      for (let node = top; node; ) {
+        if (node === el) return null;
+        if (node.parentNode) node = node.parentNode;
+        else if (node instanceof ShadowRoot) node = node.host;
+        else break;
+      }
+
+      let report = top;
+      while (true) {
+        const rootNode = report.getRootNode();
+        if (rootNode === document || !rootNode.host) break;
+        report = rootNode.host;
+      }
+      const id = report.id ? `#${report.id}` : '';
       const cls =
-        typeof top.className === 'string' && top.className.trim()
-          ? '.' + top.className.trim().split(/\s+/)[0]
+        typeof report.className === 'string' && report.className.trim()
+          ? '.' + report.className.trim().split(/\s+/)[0]
           : '';
-      return `${top.tagName.toLowerCase()}${id}${cls}`;
+      return `${report.tagName.toLowerCase()}${id}${cls}`;
     });
   } catch {
-    // Locator didn't resolve (element removed between observe and act).
-    // Fall through; the real action will surface the real error.
     return null;
+  }
+}
+
+async function actOrDescribe(locator, verb, action) {
+  try {
+    await action();
+  } catch (err) {
+    const blocker = await describeBlocker(locator);
+    if (blocker) throw new Error(`${verb} blocked by overlay: ${blocker}`);
+    throw err;
   }
 }
 
 export async function click(page, ref) {
   const locator = page.locator(`aria-ref=${ref}`);
-  const blocker = await describeBlocker(locator);
-  if (blocker) throw new Error(`click blocked by overlay: ${blocker}`);
-  await locator.click({ timeout: ACTION_TIMEOUT_MS });
+  await actOrDescribe(locator, 'click', () => locator.click({ timeout: ACTION_TIMEOUT_MS }));
 }
 
 export async function fill(page, ref, value) {
   const locator = page.locator(`aria-ref=${ref}`);
-  const blocker = await describeBlocker(locator);
-  if (blocker) throw new Error(`fill blocked by overlay: ${blocker}`);
-  await locator.fill(value, { timeout: ACTION_TIMEOUT_MS });
+  await actOrDescribe(locator, 'fill', () => locator.fill(value, { timeout: ACTION_TIMEOUT_MS }));
 }
 
 // waitUntil: 'networkidle' is deliberate — it catches SPA route transitions where

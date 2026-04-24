@@ -24,8 +24,8 @@ Modules (each is one file, one or two exports, no classes):
 
 | Module | Role | Key dependencies |
 |---|---|---|
-| observer.js | Page → compact text snapshot + numbered refs → locators map | playwright |
-| tools.js | Browser actions (click, fill, navigate) via `(page, refs, args)` | playwright |
+| observer.js | Page → ai-mode ariaSnapshot YAML string (refs baked in by Playwright) | playwright |
+| tools.js | Browser actions (click, fill, navigate) via `(page, ref, args)`; resolves ref with `aria-ref=${ref}` | playwright |
 | verifier.js | End-state checks (pure code, no LLM) | — |
 | planner.js | Goal → ordered todos with verifiable end-states (single LLM call, JSON output) | pi-ai |
 | executor.js | The loop: observe → LLM pick → act → verify. Exits on done/stuck/turn-cap | pi-ai, pi-agent-core |

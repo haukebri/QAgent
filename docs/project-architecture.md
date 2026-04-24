@@ -8,13 +8,15 @@ Each module is one file, one or two exported functions. No classes.
 
 ### observer.js
 
-Page to text. Takes a playwright page, returns `{ text, refs }`.
-`text` is the compact snapshot the LLM reads. `refs` maps numbers to locators.
+Page to text. Takes a playwright page, returns the ai-mode YAML string
+from `page.locator('body').ariaSnapshot({ mode: 'ai' })`. Playwright
+assigns element refs inline as `[ref=eN]`.
 
 ### tools.js
 
 Browser actions. One function per action. Start with click, fill, navigate.
-Each takes `(page, refs, args)`.
+Each takes `(page, ref, args)` and resolves the ref via
+`page.locator('aria-ref=${ref}')`.
 
 ### verifier.js
 
@@ -61,7 +63,7 @@ runner aggregates results
 ## build order
 
 1. `observe.js`: open a page with playwright, dump the a11y tree
-2. `observer.js`: compact text format with numbered refs
+2. `observer.js`: wrap `ariaSnapshot({ mode: 'ai' })`
 3. `tools.js`: click, fill, navigate
 4. `executor.js`: hardcoded todo, full loop working end to end
 5. `recorder.js`: trace output

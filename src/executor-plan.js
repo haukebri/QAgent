@@ -56,9 +56,10 @@ async function askNextAction({ goal, url, snapshot, history, lastError }) {
   );
   const last = [...agent.state.messages].reverse().find(m => m.role === 'assistant');
   const text = last?.content.filter(c => c.type === 'text').map(c => c.text).join('') ?? '';
+  const usage = last?.usage ?? null;
   const match = text.match(/\{[\s\S]*\}/);
   if (!match) throw new Error(`no JSON in LLM response: ${text}`);
-  return JSON.parse(match[0]);
+  return { action: JSON.parse(match[0]), usage };
 }
 
 const browser = await chromium.launch();
@@ -75,12 +76,19 @@ try {
   let finalFailure = null;
   let lastError = null;
   const history = [];
+  const total = { input: 0, output: 0, totalTokens: 0, cost: 0 };
 
   while (turns < MAX_TURNS) {
     turns++;
     const snapshot = await observe(page);
     const url = page.url();
-    const action = await askNextAction({ goal: GOAL, url, snapshot, history, lastError });
+    const { action, usage } = await askNextAction({ goal: GOAL, url, snapshot, history, lastError });
+    if (usage) {
+      total.input += usage.input ?? 0;
+      total.output += usage.output ?? 0;
+      total.totalTokens += usage.totalTokens ?? 0;
+      total.cost += usage.cost?.total ?? 0;
+    }
     console.log(`turn ${turns}: ${JSON.stringify(action)}`);
 
     if (action.action === 'done') { finalSummary = action.summary ?? null; break; }
@@ -115,6 +123,7 @@ try {
   const perTurn = turns ? (elapsed / turns).toFixed(1) : '-';
   console.log(`final url: ${page.url()}`);
   console.log(`turns: ${turns} | elapsed: ${elapsed}s | avg/turn: ${perTurn}s`);
+  console.log(`tokens: ${total.totalTokens} (in=${total.input}, out=${total.output}) | cost: $${total.cost.toFixed(4)}`);
   if (finalSummary !== null) {
     console.log(`PASS: ${finalSummary}`);
     if (page.url() === initialUrl) {

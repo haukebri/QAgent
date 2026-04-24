@@ -105,11 +105,23 @@ agent.subscribe(async (e) => {
   }
 });
 
+const t0 = Date.now();
 try {
   const initial = await observe(page);
   await agent.prompt(`Goal: ${GOAL}\n\nInitial snapshot:\n${initial}`);
+  const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+  const perTurn = turns ? (elapsed / turns).toFixed(1) : '-';
+  const usage = agent.state.messages
+    .filter(m => m.role === 'assistant')
+    .reduce((acc, m) => ({
+      input: acc.input + (m.usage?.input ?? 0),
+      output: acc.output + (m.usage?.output ?? 0),
+      totalTokens: acc.totalTokens + (m.usage?.totalTokens ?? 0),
+      cost: acc.cost + (m.usage?.cost?.total ?? 0),
+    }), { input: 0, output: 0, totalTokens: 0, cost: 0 });
   console.log(`final url: ${page.url()}`);
-  console.log(`turns: ${turns}`);
+  console.log(`turns: ${turns} | elapsed: ${elapsed}s | avg/turn: ${perTurn}s`);
+  console.log(`tokens: ${usage.totalTokens} (in=${usage.input}, out=${usage.output}) | cost: $${usage.cost.toFixed(4)}`);
   if (finalSummary !== null) console.log(`PASS: ${finalSummary}`);
   else if (finalFailure !== null) console.log(`FAIL: ${finalFailure}`);
   else if (turns >= MAX_TURNS) console.log(`STUCK: hit turn cap (${MAX_TURNS})`);

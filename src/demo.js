@@ -20,11 +20,50 @@ const httpCredentials =
     ? { username: process.env.BASIC_AUTH_USER, password: process.env.BASIC_AUTH_PASS }
     : undefined;
 
-const browser = await chromium.launch();
+const USER_AGENT =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
+async function launchBrowser() {
+  const args = ['--disable-blink-features=AutomationControlled'];
+  try {
+    return await chromium.launch({ channel: 'chrome', args });
+  } catch {
+    return await chromium.launch({ args });
+  }
+}
+
+const browser = await launchBrowser();
+let page;
 try {
-  const context = await browser.newContext(httpCredentials ? { httpCredentials } : undefined);
-  const page = await context.newPage();
-  const result = await runTodo(page, goal, model, apiKey);
+  const context = await browser.newContext({
+    userAgent: USER_AGENT,
+    locale: 'en-US',
+    timezoneId: 'Europe/Berlin',
+    viewport: { width: 1366, height: 820 },
+    ...(httpCredentials ? { httpCredentials } : {}),
+  });
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => false });
+    Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+  });
+  page = await context.newPage();
+
+  let result;
+  try {
+    result = await runTodo(page, goal, model, apiKey);
+  } catch (err) {
+    result = {
+      outcome: 'error',
+      summary: null,
+      reason: `runner crashed: ${err.message.split('\n')[0]}`,
+      turns: 0,
+      elapsedMs: 0,
+      tokens: { input: 0, output: 0, totalTokens: 0, cost: 0 },
+      finalUrl: page.url(),
+      history: [],
+      warnings: [],
+    };
+  }
 
   for (const h of result.history) {
     const extra = h.error ? ` -> error: ${h.error}` : '';
@@ -38,6 +77,7 @@ try {
   console.log(`tokens: ${result.tokens.totalTokens} (in=${result.tokens.input}, out=${result.tokens.output}) | cost: $${result.tokens.cost.toFixed(4)}`);
   if (result.outcome === 'pass') console.log(`PASS: ${result.summary}`);
   else if (result.outcome === 'fail') console.log(`FAIL: ${result.reason}`);
+  else if (result.outcome === 'error') console.log(`ERROR: ${result.reason}`);
   else console.log(`STUCK: hit turn cap`);
   for (const w of result.warnings) console.log(`⚠  WARNING: ${w}`);
 

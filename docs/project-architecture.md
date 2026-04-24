@@ -79,3 +79,22 @@ runner aggregates results
 - No config objects. Function arguments only.
 - Under 200 lines for the MVP.
 - If a module needs more than two exports, split or simplify.
+
+## bot-detection escalation
+
+Default launch uses `channel: 'chrome'`, a realistic user-agent, locale,
+timezone, viewport, and an init script that hides `navigator.webdriver`.
+This is enough for most sites (verified: aida.de Akamai, npmjs.com
+Cloudflare, google.com all pass).
+
+If a site still blocks after that, escalate in this order:
+
+1. Drop-in `patchright` in place of `playwright` (~49 stealth patches).
+2. Residential proxy via `chromium.launch({ proxy })`.
+3. CAPTCHA solver (CapSolver, 2captcha) for Cloudflare Turnstile.
+
+Network navigation uses `waitUntil: 'networkidle'` with a bounded timeout
+so SPA route transitions are caught, but heavy sites (ads, analytics,
+polling) can't hang the run forever. Navigate timeouts are non-fatal
+inside the executor loop; any other exception becomes `outcome: 'error'`
+so every run produces a result file.

@@ -1,4 +1,5 @@
 import { chromium } from 'playwright';
+import { observe } from './observer.js';
 
 const url = process.argv[2];
 if (!url) {
@@ -10,8 +11,7 @@ const browser = await chromium.launch();
 try {
   const page = await browser.newPage();
   await page.goto(url, { waitUntil: 'networkidle' });
-  const tree = await page.locator('body').ariaSnapshot();
-  console.log(tree);
+  console.log(await observe(page));
 } catch (err) {
   console.error(err.message);
   process.exitCode = 1;

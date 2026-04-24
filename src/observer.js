@@ -1,4 +1,4 @@
 export async function observe(page) {
-  await page.waitForLoadState('domcontentloaded');
+  await page.waitForLoadState('networkidle');
   return await page.locator('body').ariaSnapshot({ mode: 'ai' });
 }

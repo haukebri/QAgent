@@ -23,7 +23,10 @@ Browser surface. Read + write functions that take a playwright page:
 
 ### verifier.js
 
-End-state checks. Pure code, no LLM. `urlMatches`, `visibleText`, etc.
+End-state judge. Single LLM call over (goal, driver verdict, action history,
+final URL, final snapshot); returns `{ outcome: 'pass'|'fail', evidence }`.
+Source of truth for the run's outcome. Does not call playwright — the executor
+freezes state and passes it in.
 
 ### planner.js
 

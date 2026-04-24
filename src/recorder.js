@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-export async function record(goal, modelId, result, outDir = 'results') {
+export async function record(goal, modelId, verifierModelId, result, outDir = 'results') {
   const timestamp = new Date().toISOString();
   const safeStamp = timestamp.replace(/[:.]/g, '-');
   const dir = resolve(outDir);
@@ -11,14 +11,17 @@ export async function record(goal, modelId, result, outDir = 'results') {
     timestamp,
     goal,
     model: modelId,
+    verifierModel: verifierModelId,
     outcome: result.outcome,
-    summary: result.summary,
-    reason: result.reason,
+    evidence: result.evidence,
+    llmVerdict: result.llmVerdict,
     finalUrl: result.finalUrl,
+    finalSnapshot: result.finalSnapshot,
     stats: {
       turns: result.turns,
       elapsedMs: result.elapsedMs,
       tokens: result.tokens,
+      verifierTokens: result.verifierTokens,
     },
     steps: result.history,
     warnings: result.warnings,

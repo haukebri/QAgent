@@ -1,5 +1,6 @@
 import { Agent } from '@mariozechner/pi-agent-core';
 import { observe, click, fill, navigate } from './tools.js';
+import { verify } from './verifier.js';
 
 const HISTORY_WINDOW = 5;
 
@@ -22,8 +23,7 @@ const SYSTEM_PROMPT =
   'Pick "fail" when the goal is clearly impossible on this page/app — include a clear "reason". ' +
   "Don't fabricate: if you cannot literally verify what the goal asks for, use \"fail\".";
 
-export async function runTodo(page, goal, model, apiKey, maxTurns = 20) {
-  const initialUrl = page.url();
+export async function runTodo(page, goal, model, apiKey, maxTurns = 20, verifierModel = null) {
   const t0 = Date.now();
 
   const agent = new Agent({
@@ -36,14 +36,15 @@ export async function runTodo(page, goal, model, apiKey, maxTurns = 20) {
   const tokens = { input: 0, output: 0, totalTokens: 0, cost: 0 };
   let turns = 0;
   let lastError = null;
-  let summary = null;
-  let reason = null;
+  let verdict = null;
   let fatalError = null;
+  let finalSnapshot = '';
 
   while (turns < maxTurns) {
     turns++;
     try {
       const snapshot = await observe(page);
+      finalSnapshot = snapshot;
       const url = page.url();
 
       const { action, usage } = await askNextAction({ agent, goal, url, snapshot, history, lastError });
@@ -54,28 +55,42 @@ export async function runTodo(page, goal, model, apiKey, maxTurns = 20) {
         tokens.cost += usage.cost?.total ?? 0;
       }
 
-      if (action.action === 'done') { summary = action.summary ?? null; break; }
-      if (action.action === 'fail') { reason = action.reason ?? null; break; }
+      if (action.action === 'done' || action.action === 'fail') {
+        verdict = {
+          action: action.action,
+          summary: action.summary ?? null,
+          reason: action.reason ?? null,
+        };
+        break;
+      }
 
       if ((action.action === 'click' || action.action === 'fill') && action.ref) {
         if (!snapshot.includes(`[ref=${action.ref}]`)) {
           lastError = `ref ${action.ref} is not present in the current snapshot; pick a ref from the latest snapshot above`;
-          history.push({ turn: turns, action, error: lastError });
+          history.push({ turn: turns, action, url, error: lastError });
           continue;
         }
       }
 
+      const entry = { turn: turns, action };
+      if (action.action === 'click' || action.action === 'fill') {
+        const target = labelForRef(snapshot, action.ref);
+        if (target) entry.target = target;
+      }
       try {
         if (action.action === 'navigate') await navigate(page, action.url);
         else if (action.action === 'click') await click(page, action.ref);
         else if (action.action === 'fill') await fill(page, action.ref, action.value);
         else if (action.action === 'wait') await page.waitForTimeout(action.ms ?? 1000);
         else throw new Error(`unknown action: ${action.action}`);
-        history.push({ turn: turns, action });
+        entry.url = page.url();
+        history.push(entry);
         lastError = null;
       } catch (err) {
         lastError = err.message.split('\n')[0];
-        history.push({ turn: turns, action, error: lastError });
+        entry.url = page.url();
+        entry.error = lastError;
+        history.push(entry);
       }
     } catch (err) {
       fatalError = err.message.split('\n')[0];
@@ -84,25 +99,61 @@ export async function runTodo(page, goal, model, apiKey, maxTurns = 20) {
   }
 
   const finalUrl = page.url();
-  if (summary !== null && finalUrl === initialUrl) {
-    warnings.push(`done called but URL never changed from initial (${initialUrl})`);
+  const elapsedMs = Date.now() - t0;
+
+  if (fatalError !== null) {
+    return {
+      outcome: 'error',
+      evidence: fatalError,
+      llmVerdict: verdict,
+      turns, elapsedMs,
+      tokens, verifierTokens: null,
+      finalUrl, finalSnapshot,
+      history, warnings,
+    };
   }
 
-  const outcome = summary !== null ? 'pass'
-    : reason !== null ? 'fail'
-    : fatalError !== null ? 'error'
-    : 'stuck';
+  const verifierVerdict = verdict ?? { action: 'stuck', summary: null, reason: null };
+  const judgeModel = verifierModel ?? model;
+
+  let outcome;
+  let evidence;
+  let verifierTokens = null;
+  try {
+    const result = await verify(goal, verifierVerdict, history, finalUrl, finalSnapshot, judgeModel, apiKey);
+    outcome = result.outcome;
+    evidence = result.evidence;
+    verifierTokens = result.tokens;
+  } catch (err) {
+    warnings.push(`verifier unavailable: ${err.message.split('\n')[0]}; fell back to driver verdict`);
+    ({ outcome, evidence } = fallbackFromVerdict(verifierVerdict));
+  }
+
   return {
     outcome,
-    summary,
-    reason: reason ?? fatalError,
-    turns,
-    elapsedMs: Date.now() - t0,
-    tokens,
-    finalUrl,
-    history,
-    warnings,
+    evidence,
+    llmVerdict: verdict,
+    turns, elapsedMs,
+    tokens, verifierTokens,
+    finalUrl, finalSnapshot,
+    history, warnings,
   };
+}
+
+function fallbackFromVerdict(v) {
+  if (v.action === 'done' && v.summary) return { outcome: 'pass', evidence: v.summary };
+  if (v.action === 'fail' && v.reason) return { outcome: 'fail', evidence: v.reason };
+  if (v.action === 'done') return { outcome: 'fail', evidence: "driver said 'done' without summary" };
+  if (v.action === 'fail') return { outcome: 'fail', evidence: "driver said 'fail' without reason" };
+  return { outcome: 'fail', evidence: 'turn cap hit; no terminal verdict' };
+}
+
+function labelForRef(snapshot, ref) {
+  const re = new RegExp(`^\\s*-\\s*(\\w+)(?:\\s+"([^"]*)")?[^\\n]*\\[ref=${ref}\\]`, 'm');
+  const m = snapshot.match(re);
+  if (!m) return null;
+  const [, role, name] = m;
+  return name ? `${role} '${name}'` : role;
 }
 
 async function askNextAction({ agent, goal, url, snapshot, history, lastError }) {

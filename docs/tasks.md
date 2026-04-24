@@ -3,40 +3,18 @@
 Optimizations for the single-goal CLI (`src/demo.js` + executor loop).
 Investigate and tackle one at a time. Not ordered by priority.
 
-## 1. Better trust in `done` / `fail` without hardcoded rules
+## 1. Better trust in `done` / `fail` without hardcoded rules — DONE
 
-Today pass/fail is whatever the LLM declares. The one guard is the
-`initialUrl` check in `executor.js:88`. Heuristics like "reject done if
-URL still matches /login" are out — they break legitimate tests (e.g.
-testing the login form itself).
+Done in commit `2362bc9`. Spec:
+`docs/superpowers/specs/2026-04-24-verifier-design.md`.
 
-Two review findings belong here:
-
-- `executor.js` currently treats `done` as terminal only when
-  `summary !== null`, and `fail` as terminal only when `reason !== null`.
-  Because the prompt schema makes both fields optional, a real terminal
-  action can currently be downgraded to `stuck`. That is a correctness
-  bug in the loop, not just a product-design question.
-- Even when `summary` / `reason` are present, pass/fail is still pure
-  model self-report. There is no code-side grounding step or verifier
-  gate before we record the result.
-
-Open question: how do we raise trust in the LLM's verdict without
-baking in assumptions about what an app looks like? Options to explore
-(none picked yet):
-
-- First, make terminal state explicit in executor state (`done` / `fail`
-  seen) instead of inferring it from payload presence. Decide separately
-  whether missing `summary` / `reason` should be a hard error, a retry,
-  or a degraded-but-terminal result.
-- Second-pass verification turn: after `done`, re-observe and ask the
-  model to justify the verdict against the fresh snapshot.
-- Require the `summary` / `reason` to reference text actually present
-  in the final snapshot (content-grounding check, still generic).
-- Lean on the architecture's eventual `verifier.js` — but per-test
-  end-states belong to specs, which is out of scope for now.
-
-No implementation yet. Needs a design pass.
+`src/verifier.js` is now an LLM judge over (goal, driver verdict,
+action history, final URL, final snapshot) and is the source of truth
+for the run outcome. Outcome is binary (`pass` / `fail`); `stuck` is
+gone. The terminal-state bug (`done` / `fail` downgraded to `stuck`
+when `summary` / `reason` missing) is fixed along the way. Amends
+`docs/project-architecture.md` — verifier.js is no longer "pure code,
+no LLM".
 
 ## 2. Keep the LLM session alive across turns
 
@@ -66,20 +44,13 @@ Todo: collect 2–3 failing traces, then decide whether the fix is in
 upstream in the observer (don't surface refs for elements that aren't
 ready).
 
-## 4. Richer action descriptions in the trace
+## 4. Richer action descriptions in the trace — DONE
 
-The trace is the primary debugging tool, but `{"action":"click","ref":"e6"}`
-alone is uninformative — you can't tell what was clicked without
-cross-referencing the snapshot from the same turn.
-
-Proposed direction: at action time, pull a short label from the
-snapshot (role + accessible name, e.g. `button['Buy now']`,
-`textbox['Email']`) and attach it to the history entry. Shape TBD —
-something like `{"action":"click","ref":"e6","target":"button['Buy now']"}`.
-Applies to click and fill; navigate already has a URL.
-
-Keep it cheap — read from the already-captured snapshot string, don't
-do a second Playwright query.
+Done in commit `2362bc9` alongside task 1. Click / fill history entries
+now carry a `target` field like `"button 'Sign in'"`, parsed from the
+ariaSnapshot line via `labelForRef` in `src/executor.js`. Each entry
+also carries a `url` field captured after the action settles, so the
+trace shows navigation journeys without cross-referencing snapshots.
 
 ## 5. Observer signal filtering (future)
 

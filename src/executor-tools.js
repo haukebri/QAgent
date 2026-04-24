@@ -24,42 +24,37 @@ const context = await browser.newContext({
   httpCredentials: { username: 'req', password: 'req' },
 });
 const page = await context.newPage();
-const initialUrl = page.url();
 
 let finalSummary = null;
 let finalFailure = null;
 
-async function observedState() {
-  return `Current URL: ${page.url()}\n\n${await observe(page)}`;
-}
-
 const navigateTool = {
   name: 'navigate',
-  description: 'Navigate to a URL. Returns the new page snapshot with current URL.',
+  description: 'Navigate to a URL. Returns the new page snapshot.',
   parameters: Type.Object({ url: Type.String() }),
   execute: async (_id, { url }) => {
     await navigate(page, url);
-    return { content: [{ type: 'text', text: await observedState() }] };
+    return { content: [{ type: 'text', text: await observe(page) }] };
   },
 };
 
 const clickTool = {
   name: 'click',
-  description: 'Click the element with the given aria ref (e.g. "e5"). Returns the new page snapshot with current URL.',
+  description: 'Click the element with the given aria ref (e.g. "e5"). Returns the new page snapshot.',
   parameters: Type.Object({ ref: Type.String() }),
   execute: async (_id, { ref }) => {
     await click(page, ref);
-    return { content: [{ type: 'text', text: await observedState() }] };
+    return { content: [{ type: 'text', text: await observe(page) }] };
   },
 };
 
 const fillTool = {
   name: 'fill',
-  description: 'Fill a textbox/input identified by aria ref. Returns the new page snapshot with current URL.',
+  description: 'Fill a textbox/input identified by aria ref. Returns the new page snapshot.',
   parameters: Type.Object({ ref: Type.String(), value: Type.String() }),
   execute: async (_id, { ref, value }) => {
     await fill(page, ref, value);
-    return { content: [{ type: 'text', text: await observedState() }] };
+    return { content: [{ type: 'text', text: await observe(page) }] };
   },
 };
 
@@ -91,79 +86,37 @@ const agent = new Agent({
   initialState: {
     systemPrompt:
       'You drive a browser to accomplish a goal. Tools: navigate(url), click(ref), fill(ref, value), done(summary), fail(reason). ' +
-      'Each non-terminal tool returns the current URL plus the page snapshot as YAML with elements tagged [ref=eN]. ' +
-      'Use those refs for click and fill.\n\n' +
-      'You MUST end every run by calling done or fail. Do not respond with text only. ' +
-      "Do not keep calling non-terminal tools indefinitely — once you have enough information, commit to a verdict.\n\n" +
-      "When the goal is clearly achieved, call done with a concrete summary. When the goal is clearly impossible on this app " +
-      "(e.g. the requested data isn't displayed anywhere), call fail with a clear reason. " +
-      "Don't fabricate — if you cannot literally verify what the goal asks for, call fail.",
+      'Each action returns the new page snapshot as YAML with elements tagged [ref=eN]. ' +
+      'Use those refs for click and fill. When the goal is clearly achieved, call done with a summary. ' +
+      "When the goal is clearly impossible on this page/app (e.g. the requested data isn't displayed anywhere), " +
+      "call fail with a clear reason. Don't fabricate — if you cannot literally verify what the goal asks for, call fail.",
     model,
     tools: [navigateTool, clickTool, fillTool, doneTool, failTool],
     toolExecution: 'sequential',
-    thinkingLevel: 'low',
   },
   getApiKey: async () => apiKey,
 });
 
 let turns = 0;
-const pressureTurn = Math.floor(MAX_TURNS * 0.7);
-let pressureSent = false;
 agent.subscribe(async (e) => {
   if (e.type === 'turn_end') {
     turns++;
-    if (!pressureSent && turns >= pressureTurn && turns < MAX_TURNS) {
-      pressureSent = true;
-      const remaining = MAX_TURNS - turns;
-      try {
-        // followUp queues a message after current run; steer injects mid-run
-        if (typeof agent.steer === 'function') {
-          agent.steer(`Only ${remaining} turns remaining. Make a final decision now and call done or fail.`);
-        }
-      } catch {
-        // steering is optional — ignore if not available in this version
-      }
-    }
     if (turns >= MAX_TURNS) agent.abort();
   }
 });
 
-const t0 = Date.now();
 try {
-  await agent.prompt(`Goal: ${GOAL}\n\n${await observedState()}`);
-
-  const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-  const perTurn = turns ? (elapsed / turns).toFixed(1) : '-';
+  const initial = await observe(page);
+  await agent.prompt(`Goal: ${GOAL}\n\nInitial snapshot:\n${initial}`);
   console.log(`final url: ${page.url()}`);
-  console.log(`turns: ${turns} | elapsed: ${elapsed}s | avg/turn: ${perTurn}s`);
-
-  // Pull last assistant text for fallback inference
+  console.log(`turns: ${turns}`);
+  if (finalSummary !== null) console.log(`PASS: ${finalSummary}`);
+  else if (finalFailure !== null) console.log(`FAIL: ${finalFailure}`);
+  else if (turns >= MAX_TURNS) console.log(`STUCK: hit turn cap (${MAX_TURNS})`);
+  else console.log(`STUCK: agent ended early without done/fail (${turns} turns)`);
   const lastAssistant = [...agent.state.messages].reverse().find(m => m.role === 'assistant');
   const lastText = lastAssistant?.content.filter(c => c.type === 'text').map(c => c.text).join('') ?? '';
-
-  if (finalSummary !== null) {
-    console.log(`PASS: ${finalSummary}`);
-    if (page.url() === initialUrl) {
-      console.log(`⚠  WARNING: done called but URL never changed from initial (${initialUrl})`);
-    }
-  } else if (finalFailure !== null) {
-    console.log(`FAIL: ${finalFailure}`);
-  } else {
-    // STUCK — try to infer from last assistant text
-    const failMatch = /\b(fail|impossible|cannot (verify|complete|find))\b/i.test(lastText);
-    const doneMatch = /\b(done|complete|success|verified)\b/i.test(lastText);
-    const stuckKind = turns >= MAX_TURNS ? `hit turn cap (${MAX_TURNS})` : `agent ended early (${turns} turns)`;
-    if (failMatch && !doneMatch) {
-      console.log(`STUCK (inferred FAIL): ${stuckKind}`);
-      if (lastText) console.log(`  last assistant text: ${lastText.slice(0, 400)}`);
-    } else if (doneMatch && !failMatch) {
-      console.log(`STUCK (inferred PASS): ${stuckKind}`);
-      if (lastText) console.log(`  last assistant text: ${lastText.slice(0, 400)}`);
-    } else {
-      console.log(`STUCK: ${stuckKind}`);
-      if (lastText) console.log(`  last assistant text: ${lastText.slice(0, 400)}`);
-    }
-  }
+  if (lastText) console.log(`last assistant text: ${lastText.slice(0, 500)}`);
 } finally {
   await browser.close();
 }

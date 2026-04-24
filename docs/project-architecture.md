@@ -6,16 +6,19 @@ AI-driven QA testing. Browser is driven by script. LLM is the decider.
 
 Each module is one file, one or two exported functions. No classes.
 
-### observer.js
+### browser.js
 
-Page to text. Takes a playwright page, returns the ai-mode YAML string
-from `page.locator('body').ariaSnapshot({ mode: 'ai' })`. Playwright
-assigns element refs inline as `[ref=eN]`.
+Browser lifecycle. Exports `launchPage({ httpCredentials })` which opens
+chromium (Chrome channel with chromium fallback), applies the stealth
+defaults (UA, locale, timezone, viewport, webdriver/languages init script),
+and returns `{ browser, page }`. Single source of truth for the
+bot-detection escalation ladder below.
 
 ### tools.js
 
-Browser actions. One function per action. Start with click, fill, navigate.
-Each takes `(page, ref, args)` and resolves the ref via
+Browser surface. Read + write functions that take a playwright page:
+`observe(page)` returns the ai-mode ariaSnapshot YAML (refs baked in as
+`[ref=eN]`); `click`, `fill`, `navigate` resolve refs via
 `page.locator('aria-ref=${ref}')`.
 
 ### verifier.js
@@ -46,7 +49,7 @@ Parse argv, call runner.
 
 ## dependencies
 
-- `playwright`: browser driver. Used only in observer.js and tools.js.
+- `playwright`: browser driver. Used only in browser.js and tools.js.
 - `pi-ai`: LLM calls. Used only in planner.js and executor.js.
 - `pi-agent-core`: agent loop. Used only in executor.js.
 
@@ -55,7 +58,7 @@ Parse argv, call runner.
 ```
 spec -> runner -> planner returns todos
 for each todo:
-  executor loop: observer -> LLM decide -> tool -> verifier
+  executor loop: observe -> LLM decide -> tool -> verifier
   recorder captures every step
 runner aggregates results
 ```
@@ -63,8 +66,8 @@ runner aggregates results
 ## build order
 
 1. `observe.js`: open a page with playwright, dump the a11y tree
-2. `observer.js`: wrap `ariaSnapshot({ mode: 'ai' })`
-3. `tools.js`: click, fill, navigate
+2. `tools.js`: observe (wraps `ariaSnapshot({ mode: 'ai' })`), click, fill, navigate
+3. `browser.js`: chromium launch + stealth defaults, shared by observe.js and demo.js
 4. `executor.js`: hardcoded todo, full loop working end to end
 5. `recorder.js`: trace output
 6. `planner.js`: goal to todos

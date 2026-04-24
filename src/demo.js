@@ -1,8 +1,8 @@
 // Temporary runner for src/executor.js. Delete when runner.js / cli.js land.
 // Usage: node --env-file=.env src/demo.js "<goal>"
 //   optional env: BASIC_AUTH_USER, BASIC_AUTH_PASS (enables httpCredentials)
-import { chromium } from 'playwright';
 import { getModel } from '@mariozechner/pi-ai';
+import { launchPage } from './browser.js';
 import { runTodo } from './executor.js';
 import { record } from './recorder.js';
 
@@ -20,34 +20,8 @@ const httpCredentials =
     ? { username: process.env.BASIC_AUTH_USER, password: process.env.BASIC_AUTH_PASS }
     : undefined;
 
-const USER_AGENT =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
-
-async function launchBrowser() {
-  const args = ['--disable-blink-features=AutomationControlled'];
-  try {
-    return await chromium.launch({ channel: 'chrome', args });
-  } catch {
-    return await chromium.launch({ args });
-  }
-}
-
-const browser = await launchBrowser();
-let page;
+const { browser, page } = await launchPage({ httpCredentials });
 try {
-  const context = await browser.newContext({
-    userAgent: USER_AGENT,
-    locale: 'en-US',
-    timezoneId: 'Europe/Berlin',
-    viewport: { width: 1366, height: 820 },
-    ...(httpCredentials ? { httpCredentials } : {}),
-  });
-  await context.addInitScript(() => {
-    Object.defineProperty(navigator, 'webdriver', { get: () => false });
-    Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-  });
-  page = await context.newPage();
-
   let result;
   try {
     result = await runTodo(page, goal, model, apiKey);

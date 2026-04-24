@@ -1,6 +1,5 @@
 import { Agent } from '@mariozechner/pi-agent-core';
-import { observe } from './observer.js';
-import { click, fill, navigate } from './tools.js';
+import { observe, click, fill, navigate } from './tools.js';
 
 const HISTORY_WINDOW = 5;
 

@@ -11,29 +11,33 @@ const model = getModel('openrouter', modelId);
 if (!model) throw new Error(`unknown model: ${modelId}`);
 
 const GOAL =
-  'Navigate to https://example.com and click the "More information..." link. ' +
-  'The task is complete when the URL contains "iana.org".';
-const MAX_TURNS = 15;
+  'Navigate to https://req-eng-frontend.haukebrinkmann.com/ and log in using ' +
+  'email "haukebr@gmail.com" and password "test123". After logging in, go to the ' +
+  'admin page and report how many projects currently exist. ' +
+  'When finished, emit {"action": "done", "summary": "..."} with the count.';
+const MAX_TURNS = 20;
 
 const SYSTEM_PROMPT =
   'You plan one browser action at a time toward a goal. Respond with a single JSON object and nothing else (no markdown fences, no commentary).\n\n' +
   'Schema:\n' +
-  '  { "action": "navigate" | "click" | "fill" | "done", "url"?: string, "ref"?: string, "value"?: string }\n\n' +
+  '  { "action": "navigate" | "click" | "fill" | "done", "url"?: string, "ref"?: string, "value"?: string, "summary"?: string }\n\n' +
   'Examples:\n' +
   '  {"action": "navigate", "url": "https://example.com"}\n' +
   '  {"action": "click", "ref": "e6"}\n' +
   '  {"action": "fill", "ref": "e40", "value": "playwright"}\n' +
-  '  {"action": "done"}\n\n' +
-  'Pick "done" when the goal is clearly complete (e.g. the URL or page state matches).';
+  '  {"action": "done", "summary": "There are 42 projects."}\n\n' +
+  'Pick "done" when the goal is clearly complete. Include a "summary" that answers any ' +
+  'question the goal asked for (counts, values extracted, etc.).';
 
-async function askNextAction({ goal, url, snapshot }) {
+async function askNextAction({ goal, url, snapshot, lastError }) {
   // Fresh agent each turn — the whole point of this variant is bounded context.
   const agent = new Agent({
     initialState: { systemPrompt: SYSTEM_PROMPT, model },
     getApiKey: async () => apiKey,
   });
+  const errorBlock = lastError ? `\n\nPrevious action failed: ${lastError}\nAdjust your choice.\n` : '';
   await agent.prompt(
-    `Goal: ${goal}\n\nCurrent URL: ${url}\n\nCurrent snapshot:\n${snapshot}\n\nNext action (JSON only):`
+    `Goal: ${goal}\n\nCurrent URL: ${url}${errorBlock}\n\nCurrent snapshot:\n${snapshot}\n\nNext action (JSON only):`
   );
   const last = [...agent.state.messages].reverse().find(m => m.role === 'assistant');
   const text = last?.content.filter(c => c.type === 'text').map(c => c.text).join('') ?? '';
@@ -43,29 +47,39 @@ async function askNextAction({ goal, url, snapshot }) {
 }
 
 const browser = await chromium.launch();
-const page = await browser.newPage();
+const context = await browser.newContext({
+  httpCredentials: { username: 'req', password: 'req' },
+});
+const page = await context.newPage();
 
 try {
   let turns = 0;
-  let done = false;
-  while (turns < MAX_TURNS && !done) {
+  let finalSummary = null;
+  let lastError = null;
+  while (turns < MAX_TURNS) {
     turns++;
     const snapshot = await observe(page);
     const url = page.url();
-    const action = await askNextAction({ goal: GOAL, url, snapshot });
+    const action = await askNextAction({ goal: GOAL, url, snapshot, lastError });
     console.log(`turn ${turns}: ${JSON.stringify(action)}`);
 
-    if (action.action === 'done') { done = true; break; }
-    if (action.action === 'navigate') await navigate(page, action.url);
-    else if (action.action === 'click') await click(page, action.ref);
-    else if (action.action === 'fill') await fill(page, action.ref, action.value);
-    else throw new Error(`unknown action: ${action.action}`);
+    if (action.action === 'done') { finalSummary = action.summary ?? null; break; }
+
+    try {
+      if (action.action === 'navigate') await navigate(page, action.url);
+      else if (action.action === 'click') await click(page, action.ref);
+      else if (action.action === 'fill') await fill(page, action.ref, action.value);
+      else throw new Error(`unknown action: ${action.action}`);
+      lastError = null;
+    } catch (err) {
+      lastError = err.message.split('\n')[0];
+      console.log(`  error: ${lastError}`);
+    }
   }
 
-  const urlOk = page.url().includes('iana.org');
   console.log(`final url: ${page.url()}`);
   console.log(`turns: ${turns}`);
-  console.log(urlOk ? 'PASS' : 'FAIL');
+  console.log(`summary: ${finalSummary ?? '(no summary — done not called)'}`);
 } finally {
   await browser.close();
 }

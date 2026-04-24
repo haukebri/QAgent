@@ -11,12 +11,19 @@ const model = getModel('openrouter', modelId);
 if (!model) throw new Error(`unknown model: ${modelId}`);
 
 const GOAL =
-  'Navigate to https://example.com and click the "More information..." link. ' +
-  'The task is complete when the URL contains "iana.org".';
-const MAX_TURNS = 15;
+  'Navigate to https://req-eng-frontend.haukebrinkmann.com/ and log in using ' +
+  'email "haukebr@gmail.com" and password "test123". After logging in, go to the ' +
+  'admin page and report how many projects currently exist. ' +
+  'Call done with a summary that states the count.';
+const MAX_TURNS = 20;
 
 const browser = await chromium.launch();
-const page = await browser.newPage();
+const context = await browser.newContext({
+  httpCredentials: { username: 'req', password: 'req' },
+});
+const page = await context.newPage();
+
+let finalSummary = null;
 
 const navigateTool = {
   name: 'navigate',
@@ -50,12 +57,14 @@ const fillTool = {
 
 const doneTool = {
   name: 'done',
-  description: 'Signal that the goal has been achieved. Call this when the task is complete.',
-  parameters: Type.Object({}),
-  execute: async () => ({
-    content: [{ type: 'text', text: 'Done.' }],
-    terminate: true,
-  }),
+  description:
+    'Signal the goal has been achieved. Provide a summary that answers any question ' +
+    'the goal asked for (e.g. counts, values extracted from the page).',
+  parameters: Type.Object({ summary: Type.String() }),
+  execute: async (_id, { summary }) => {
+    finalSummary = summary;
+    return { content: [{ type: 'text', text: `Done: ${summary}` }], terminate: true };
+  },
 };
 
 const agent = new Agent({
@@ -82,10 +91,9 @@ agent.subscribe(async (e) => {
 try {
   const initial = await observe(page);
   await agent.prompt(`Goal: ${GOAL}\n\nInitial snapshot:\n${initial}`);
-  const urlOk = page.url().includes('iana.org');
   console.log(`final url: ${page.url()}`);
   console.log(`turns: ${turns}`);
-  console.log(urlOk ? 'PASS' : 'FAIL');
+  console.log(`summary: ${finalSummary ?? '(no summary — done not called)'}`);
 } finally {
   await browser.close();
 }

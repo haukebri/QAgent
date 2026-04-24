@@ -16,7 +16,7 @@ when `summary` / `reason` missing) is fixed along the way. Amends
 `docs/project-architecture.md` — verifier.js is no longer "pure code,
 no LLM".
 
-## 2. Keep the LLM session alive across turns
+## 2. Keep the LLM session alive across turns DONE
 
 `executor.js:110` calls `agent.reset()` every turn, so the system
 prompt + full snapshot are re-sent on every single call. A 20-turn run
@@ -33,7 +33,7 @@ Needs: check what `pi-agent-core` exposes for continuing a session,
 and how snapshots should be represented so older ones don't bloat
 context.
 
-## 3. Click timeout issues
+## 3. Click timeout issues DONE
 
 Seen in real run results: clicks occasionally time out. Symptoms and
 root cause not yet characterized (element detached? navigation in

@@ -1,8 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import { Agent } from '@mariozechner/pi-agent-core';
 import { observe, click, fill, navigate } from './tools.js';
 import { verify } from './verifier.js';
 
-const HISTORY_WINDOW = 5;
+const SNAPSHOT_BEGIN = '<<SNAPSHOT_BEGIN>>';
+const SNAPSHOT_END = '<<SNAPSHOT_END>>';
+const SCRUBBED_SNAPSHOT = '[snapshot omitted; see latest snapshot below]';
 
 const SYSTEM_PROMPT =
   'You plan one browser action at a time toward a goal. Respond with a single JSON object and nothing else (no markdown fences, no commentary).\n\n' +
@@ -26,19 +29,23 @@ const SYSTEM_PROMPT =
   '`button`, `textbox`, `menuitem`. A `generic [cursor=pointer]` span is often a ' +
   'dropdown / mega-menu trigger that expands inline rather than navigating — if you ' +
   'click one and see "page grew +NNN chars" without a URL change, new menu items ' +
-  'appeared in the snapshot; look for them instead of re-clicking the same ref.';
+  'appeared in the snapshot; look for them instead of re-clicking the same ref.\n\n' +
+  `Snapshots in earlier user messages are replaced with "${SCRUBBED_SNAPSHOT}" — only the latest snapshot is current. ` +
+  'Always pick refs from the latest snapshot.';
 
 export async function runTodo(page, goal, model, apiKey, maxTurns = 20, verifierModel = null) {
   const t0 = Date.now();
 
   const agent = new Agent({
     initialState: { systemPrompt: SYSTEM_PROMPT, model },
+    sessionId: randomUUID(),
+    transformContext: async (messages) => scrubOldSnapshots(messages),
     getApiKey: async () => apiKey,
   });
 
   const history = [];
   const warnings = [];
-  const tokens = { input: 0, output: 0, totalTokens: 0, cost: 0 };
+  const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 };
   let turns = 0;
   let lastError = null;
   let verdict = null;
@@ -51,24 +58,24 @@ export async function runTodo(page, goal, model, apiKey, maxTurns = 20, verifier
     turns++;
     try {
       const snapshot = await observe(page);
-      // Retroactively annotate the previous action with the DOM effect it had:
-      // the delta in snapshot size between before-action and after-action.
-      // This lets the LLM distinguish clicks that mutated the page (opened a
-      // dropdown, loaded content) from clicks that were true no-ops.
+      let snapshotDelta = null;
       if (prevSnapshotLen !== null && history.length > 0) {
         const last = history[history.length - 1];
         if (last.action?.action !== 'wait') {
-          last.snapshotDelta = snapshot.length - prevSnapshotLen;
+          snapshotDelta = snapshot.length - prevSnapshotLen;
+          last.snapshotDelta = snapshotDelta;
         }
       }
       prevSnapshotLen = snapshot.length;
       finalSnapshot = snapshot;
       const url = page.url();
 
-      const { action, usage } = await askNextAction({ agent, goal, url, snapshot, history, lastError });
+      const { action, usage } = await askNextAction({ agent, goal, url, snapshot, lastError, snapshotDelta });
       if (usage) {
         tokens.input += usage.input ?? 0;
         tokens.output += usage.output ?? 0;
+        tokens.cacheRead += usage.cacheRead ?? 0;
+        tokens.cacheWrite += usage.cacheWrite ?? 0;
         tokens.totalTokens += usage.totalTokens ?? 0;
         tokens.cost += usage.cost?.total ?? 0;
       }
@@ -177,33 +184,62 @@ function labelForRef(snapshot, ref) {
   return name ? `${role} '${name}'` : role;
 }
 
-function formatHistoryEntry(h) {
-  const act = JSON.stringify(h.action);
-  if (h.error) return `${act} -> error: ${h.error}`;
-  const bits = [];
-  if (h.url) bits.push(`url=${h.url}`);
-  if (typeof h.snapshotDelta === 'number') {
-    const d = h.snapshotDelta;
-    if (d > 200) bits.push(`page grew +${d} chars (new content appeared)`);
-    else if (d < -200) bits.push(`page shrunk ${d} chars (content removed)`);
-    else bits.push('page unchanged');
-  }
-  return bits.length ? `${act} -> ${bits.join('; ')}` : act;
-}
-
-async function askNextAction({ agent, goal, url, snapshot, history, lastError }) {
-  agent.reset();
-  const historyBlock = history.length
-    ? `\n\nRecent actions (most recent last):\n${history.slice(-HISTORY_WINDOW).map((h, i) => `  ${i + 1}. ${formatHistoryEntry(h)}`).join('\n')}\n`
-    : '';
-  const errorBlock = lastError ? `\n\nPrevious action failed: ${lastError}\nAdjust your choice.\n` : '';
-  await agent.prompt(
-    `Goal: ${goal}\n\nCurrent URL: ${url}${historyBlock}${errorBlock}\n\nCurrent snapshot:\n${snapshot}\n\nNext action (JSON only):`
-  );
+async function askNextAction({ agent, goal, url, snapshot, lastError, snapshotDelta }) {
+  const isFirstTurn = agent.state.messages.length === 0;
+  const message = isFirstTurn
+    ? buildInitialPrompt({ goal, url, snapshot })
+    : buildFollowUpPrompt({ url, snapshot, lastError, snapshotDelta });
+  await agent.prompt(message);
   const last = [...agent.state.messages].reverse().find(m => m.role === 'assistant');
   const text = last?.content.filter(c => c.type === 'text').map(c => c.text).join('') ?? '';
   const usage = last?.usage ?? null;
   const match = text.match(/\{[\s\S]*\}/);
   if (!match) throw new Error(`no JSON in LLM response: ${text}`);
   return { action: JSON.parse(match[0]), usage };
+}
+
+function buildInitialPrompt({ goal, url, snapshot }) {
+  return (
+    `Goal: ${goal}\n\n` +
+    `Current URL: ${url}\n\n` +
+    `${SNAPSHOT_BEGIN}\n${snapshot}\n${SNAPSHOT_END}\n\n` +
+    `Next action (JSON only):`
+  );
+}
+
+function buildFollowUpPrompt({ url, snapshot, lastError, snapshotDelta }) {
+  const lines = [];
+  if (lastError) lines.push(`Previous action failed: ${lastError}`);
+  lines.push(`Current URL: ${url}`);
+  if (typeof snapshotDelta === 'number') {
+    if (snapshotDelta > 200) lines.push(`Page grew +${snapshotDelta} chars (new content appeared).`);
+    else if (snapshotDelta < -200) lines.push(`Page shrunk ${snapshotDelta} chars (content removed).`);
+    else lines.push('Page unchanged.');
+  }
+  lines.push('');
+  lines.push(`${SNAPSHOT_BEGIN}\n${snapshot}\n${SNAPSHOT_END}`);
+  lines.push('');
+  lines.push('Next action (JSON only):');
+  return lines.join('\n');
+}
+
+function scrubOldSnapshots(messages) {
+  const lastUserIdx = findLastUserIndex(messages);
+  if (lastUserIdx < 0) return messages;
+  const re = new RegExp(`${SNAPSHOT_BEGIN}[\\s\\S]*?${SNAPSHOT_END}`, 'g');
+  return messages.map((m, i) => {
+    if (m.role !== 'user' || i === lastUserIdx) return m;
+    const newContent = m.content.map(c => {
+      if (c.type !== 'text' || !c.text.includes(SNAPSHOT_BEGIN)) return c;
+      return { ...c, text: c.text.replace(re, SCRUBBED_SNAPSHOT) };
+    });
+    return { ...m, content: newContent };
+  });
+}
+
+function findLastUserIndex(messages) {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') return i;
+  }
+  return -1;
 }

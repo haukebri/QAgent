@@ -12,9 +12,11 @@ if (!model) throw new Error(`unknown model: ${modelId}`);
 
 const GOAL =
   'Navigate to https://req-eng-frontend.haukebrinkmann.com/ and log in using ' +
-  'email "haukebr@gmail.com" and password "test123". After logging in, go to the ' +
-  'admin page and report how many projects currently exist. ' +
-  'Call done with a summary that states the count.';
+  'email "haukebr@gmail.com" and password "test123". After logging in, navigate ' +
+  'to the admin page and verify that a list of users (names, emails, or similar ' +
+  'per-user rows) is visible. Call done with a description of the list if you see ' +
+  'one. If only counts/statistics are shown but no actual user list, call fail ' +
+  'with a clear reason.';
 const MAX_TURNS = 20;
 
 const browser = await chromium.launch();
@@ -24,6 +26,7 @@ const context = await browser.newContext({
 const page = await context.newPage();
 
 let finalSummary = null;
+let finalFailure = null;
 
 const navigateTool = {
   name: 'navigate',
@@ -67,14 +70,28 @@ const doneTool = {
   },
 };
 
+const failTool = {
+  name: 'fail',
+  description:
+    'Signal the goal cannot be achieved on this page/app. Provide a clear reason. ' +
+    "Use this instead of done when you can't literally verify what the goal asks for.",
+  parameters: Type.Object({ reason: Type.String() }),
+  execute: async (_id, { reason }) => {
+    finalFailure = reason;
+    return { content: [{ type: 'text', text: `Failed: ${reason}` }], terminate: true };
+  },
+};
+
 const agent = new Agent({
   initialState: {
     systemPrompt:
-      'You drive a browser to accomplish a goal. Tools: navigate(url), click(ref), fill(ref, value), done(). ' +
+      'You drive a browser to accomplish a goal. Tools: navigate(url), click(ref), fill(ref, value), done(summary), fail(reason). ' +
       'Each action returns the new page snapshot as YAML with elements tagged [ref=eN]. ' +
-      'Use those refs for click and fill. When the goal is achieved, call done.',
+      'Use those refs for click and fill. When the goal is clearly achieved, call done with a summary. ' +
+      "When the goal is clearly impossible on this page/app (e.g. the requested data isn't displayed anywhere), " +
+      "call fail with a clear reason. Don't fabricate — if you cannot literally verify what the goal asks for, call fail.",
     model,
-    tools: [navigateTool, clickTool, fillTool, doneTool],
+    tools: [navigateTool, clickTool, fillTool, doneTool, failTool],
     toolExecution: 'sequential',
   },
   getApiKey: async () => apiKey,
@@ -93,7 +110,9 @@ try {
   await agent.prompt(`Goal: ${GOAL}\n\nInitial snapshot:\n${initial}`);
   console.log(`final url: ${page.url()}`);
   console.log(`turns: ${turns}`);
-  console.log(`summary: ${finalSummary ?? '(no summary — done not called)'}`);
+  if (finalSummary !== null) console.log(`PASS: ${finalSummary}`);
+  else if (finalFailure !== null) console.log(`FAIL: ${finalFailure}`);
+  else console.log(`STUCK: hit turn cap (${MAX_TURNS})`);
 } finally {
   await browser.close();
 }

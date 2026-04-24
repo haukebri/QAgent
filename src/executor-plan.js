@@ -12,22 +12,27 @@ if (!model) throw new Error(`unknown model: ${modelId}`);
 
 const GOAL =
   'Navigate to https://req-eng-frontend.haukebrinkmann.com/ and log in using ' +
-  'email "haukebr@gmail.com" and password "test123". After logging in, go to the ' +
-  'admin page and report how many projects currently exist. ' +
-  'When finished, emit {"action": "done", "summary": "..."} with the count.';
+  'email "haukebr@gmail.com" and password "test123". After logging in, navigate ' +
+  'to the admin page and verify that a list of users (names, emails, or similar ' +
+  'per-user rows) is visible. Emit {"action": "done", "summary": "..."} with a ' +
+  'description of the list if you see one. If only counts/statistics are shown ' +
+  'but no actual user list, emit {"action": "fail", "reason": "..."}.';
 const MAX_TURNS = 20;
 
 const SYSTEM_PROMPT =
   'You plan one browser action at a time toward a goal. Respond with a single JSON object and nothing else (no markdown fences, no commentary).\n\n' +
   'Schema:\n' +
-  '  { "action": "navigate" | "click" | "fill" | "done", "url"?: string, "ref"?: string, "value"?: string, "summary"?: string }\n\n' +
+  '  { "action": "navigate" | "click" | "fill" | "done" | "fail", "url"?: string, "ref"?: string, "value"?: string, "summary"?: string, "reason"?: string }\n\n' +
   'Examples:\n' +
   '  {"action": "navigate", "url": "https://example.com"}\n' +
   '  {"action": "click", "ref": "e6"}\n' +
   '  {"action": "fill", "ref": "e40", "value": "playwright"}\n' +
-  '  {"action": "done", "summary": "There are 42 projects."}\n\n' +
-  'Pick "done" when the goal is clearly complete. Include a "summary" that answers any ' +
-  'question the goal asked for (counts, values extracted, etc.).';
+  '  {"action": "done", "summary": "There are 42 projects."}\n' +
+  '  {"action": "fail", "reason": "The admin page shows counts only; no user list is rendered."}\n\n' +
+  'Pick "done" when the goal is clearly complete — include a "summary" that answers ' +
+  'any question the goal asked for. Pick "fail" when the goal is clearly impossible ' +
+  "on this page/app — include a clear \"reason\". Don't fabricate: if you cannot " +
+  'literally verify what the goal asks for, use "fail".';
 
 async function askNextAction({ goal, url, snapshot, lastError }) {
   // Fresh agent each turn — the whole point of this variant is bounded context.
@@ -55,6 +60,7 @@ const page = await context.newPage();
 try {
   let turns = 0;
   let finalSummary = null;
+  let finalFailure = null;
   let lastError = null;
   while (turns < MAX_TURNS) {
     turns++;
@@ -64,6 +70,7 @@ try {
     console.log(`turn ${turns}: ${JSON.stringify(action)}`);
 
     if (action.action === 'done') { finalSummary = action.summary ?? null; break; }
+    if (action.action === 'fail') { finalFailure = action.reason ?? null; break; }
 
     try {
       if (action.action === 'navigate') await navigate(page, action.url);
@@ -79,7 +86,9 @@ try {
 
   console.log(`final url: ${page.url()}`);
   console.log(`turns: ${turns}`);
-  console.log(`summary: ${finalSummary ?? '(no summary — done not called)'}`);
+  if (finalSummary !== null) console.log(`PASS: ${finalSummary}`);
+  else if (finalFailure !== null) console.log(`FAIL: ${finalFailure}`);
+  else console.log(`STUCK: hit turn cap (${MAX_TURNS})`);
 } finally {
   await browser.close();
 }

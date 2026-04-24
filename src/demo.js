@@ -28,7 +28,7 @@ const { browser, page } = await launchPage({ httpCredentials });
 try {
   let result;
   try {
-    result = await runTodo(page, goal, model, apiKey, 20, verifierModel);
+    result = await runTodo(page, goal, model, apiKey, 50, verifierModel);
   } catch (err) {
     result = {
       outcome: 'error',

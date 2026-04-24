@@ -1,7 +1,8 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { Agent } from '@mariozechner/pi-agent-core';
 import { observe, click, fill, navigate } from './tools.js';
 import { verify } from './verifier.js';
+import { sliceSections, compressAgainstBaseline } from './snapshot-compress.js';
 
 const SNAPSHOT_BEGIN = '<<SNAPSHOT_BEGIN>>';
 const SNAPSHOT_END = '<<SNAPSHOT_END>>';
@@ -31,20 +32,25 @@ const SYSTEM_PROMPT =
   'click one and see "page grew +NNN chars" without a URL change, new menu items ' +
   'appeared in the snapshot; look for them instead of re-clicking the same ref.\n\n' +
   `Snapshots in earlier user messages are replaced with "${SCRUBBED_SNAPSHOT}" — only the latest snapshot is current. ` +
-  'Always pick refs from the latest snapshot.';
+  'Always pick refs from the latest snapshot.\n\n' +
+  'A user message beginning "Baseline anchor (turn N)." is a pinned reference snapshot kept in full. ' +
+  'In the latest snapshot, a section body may read "# unchanged since turn N" — that section is byte-identical to the baseline anchor\'s, ' +
+  'so its refs are the SAME numbers as in the anchor. Look up element details there.';
 
 export async function runTodo(page, goal, model, apiKey, maxTurns = 20, verifierModel = null) {
   const t0 = Date.now();
 
+  const scrubState = { baselineTurn: 0 };
   const agent = new Agent({
     initialState: { systemPrompt: SYSTEM_PROMPT, model },
     sessionId: randomUUID(),
-    transformContext: async (messages) => scrubOldSnapshots(messages),
+    transformContext: async (messages) => scrubOldSnapshots(messages, scrubState.baselineTurn),
     getApiKey: async () => apiKey,
   });
 
   const history = [];
   const warnings = [];
+  const snapshotStats = [];
   const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 };
   let turns = 0;
   let lastError = null;
@@ -53,6 +59,8 @@ export async function runTodo(page, goal, model, apiKey, maxTurns = 20, verifier
   let finalSnapshot = '';
 
   let prevSnapshotLen = null;
+  let baseline = null;
+  let prevCompressionRatio = null;
 
   while (turns < maxTurns) {
     turns++;
@@ -68,9 +76,39 @@ export async function runTodo(page, goal, model, apiKey, maxTurns = 20, verifier
       }
       prevSnapshotLen = snapshot.length;
       finalSnapshot = snapshot;
+      const sections = sliceSections(snapshot);
+      const statEntry = {
+        turn: turns,
+        bytes: snapshot.length,
+        sha1: createHash('sha1').update(snapshot).digest('hex'),
+        sections: sections.map(s => ({ role: s.role, ref: s.ref, bytes: s.text.length, sha1: s.sha1 })),
+      };
+      snapshotStats.push(statEntry);
       const url = page.url();
 
-      const { action, usage } = await askNextAction({ agent, goal, url, snapshot, lastError, snapshotDelta });
+      const shouldReset = !baseline
+        || url !== baseline.url
+        || (prevCompressionRatio != null && prevCompressionRatio > 0.6)
+        || turns - baseline.turn >= 6
+        || (lastError && snapshotDelta != null && snapshotDelta > 500);
+
+      let messageSnapshot;
+      let isBaselineTurn;
+      if (shouldReset) {
+        baseline = { turn: turns, url, yaml: snapshot };
+        scrubState.baselineTurn = turns;
+        messageSnapshot = snapshot;
+        isBaselineTurn = true;
+        prevCompressionRatio = null;
+      } else {
+        const { text, stats } = compressAgainstBaseline(snapshot, baseline.yaml, baseline.turn);
+        messageSnapshot = text;
+        isBaselineTurn = false;
+        prevCompressionRatio = stats.origBytes > 0 ? stats.compressedBytes / stats.origBytes : 1;
+        statEntry.compression = stats;
+      }
+
+      const { action, usage } = await askNextAction({ agent, goal, url, messageSnapshot, isBaselineTurn, baselineTurn: baseline.turn, lastError, snapshotDelta });
       if (usage) {
         tokens.input += usage.input ?? 0;
         tokens.output += usage.output ?? 0;
@@ -137,7 +175,7 @@ export async function runTodo(page, goal, model, apiKey, maxTurns = 20, verifier
       turns, elapsedMs,
       tokens, verifierTokens: null,
       finalUrl, finalSnapshot,
-      history, warnings,
+      history, warnings, snapshotStats,
     };
   }
 
@@ -164,7 +202,7 @@ export async function runTodo(page, goal, model, apiKey, maxTurns = 20, verifier
     turns, elapsedMs,
     tokens, verifierTokens,
     finalUrl, finalSnapshot,
-    history, warnings,
+    history, warnings, snapshotStats,
   };
 }
 
@@ -184,11 +222,11 @@ function labelForRef(snapshot, ref) {
   return name ? `${role} '${name}'` : role;
 }
 
-async function askNextAction({ agent, goal, url, snapshot, lastError, snapshotDelta }) {
+async function askNextAction({ agent, goal, url, messageSnapshot, isBaselineTurn, baselineTurn, lastError, snapshotDelta }) {
   const isFirstTurn = agent.state.messages.length === 0;
   const message = isFirstTurn
-    ? buildInitialPrompt({ goal, url, snapshot })
-    : buildFollowUpPrompt({ url, snapshot, lastError, snapshotDelta });
+    ? buildInitialPrompt({ goal, url, snapshot: messageSnapshot, baselineTurn })
+    : buildFollowUpPrompt({ url, snapshot: messageSnapshot, lastError, snapshotDelta, isBaselineTurn, baselineTurn });
   await agent.prompt(message);
   const last = [...agent.state.messages].reverse().find(m => m.role === 'assistant');
   const text = last?.content.filter(c => c.type === 'text').map(c => c.text).join('') ?? '';
@@ -198,8 +236,9 @@ async function askNextAction({ agent, goal, url, snapshot, lastError, snapshotDe
   return { action: JSON.parse(match[0]), usage };
 }
 
-function buildInitialPrompt({ goal, url, snapshot }) {
+function buildInitialPrompt({ goal, url, snapshot, baselineTurn }) {
   return (
+    `Baseline anchor (turn ${baselineTurn}).\n\n` +
     `Goal: ${goal}\n\n` +
     `Current URL: ${url}\n\n` +
     `${SNAPSHOT_BEGIN}\n${snapshot}\n${SNAPSHOT_END}\n\n` +
@@ -207,8 +246,9 @@ function buildInitialPrompt({ goal, url, snapshot }) {
   );
 }
 
-function buildFollowUpPrompt({ url, snapshot, lastError, snapshotDelta }) {
+function buildFollowUpPrompt({ url, snapshot, lastError, snapshotDelta, isBaselineTurn, baselineTurn }) {
   const lines = [];
+  if (isBaselineTurn) lines.push(`Baseline anchor (turn ${baselineTurn}).`, '');
   if (lastError) lines.push(`Previous action failed: ${lastError}`);
   lines.push(`Current URL: ${url}`);
   if (typeof snapshotDelta === 'number') {
@@ -223,15 +263,17 @@ function buildFollowUpPrompt({ url, snapshot, lastError, snapshotDelta }) {
   return lines.join('\n');
 }
 
-function scrubOldSnapshots(messages) {
+function scrubOldSnapshots(messages, keepBaselineTurn) {
   const lastUserIdx = findLastUserIndex(messages);
   if (lastUserIdx < 0) return messages;
-  const re = new RegExp(`${SNAPSHOT_BEGIN}[\\s\\S]*?${SNAPSHOT_END}`, 'g');
+  const snapRe = new RegExp(`${SNAPSHOT_BEGIN}[\\s\\S]*?${SNAPSHOT_END}`, 'g');
+  const anchorPrefix = keepBaselineTurn ? `Baseline anchor (turn ${keepBaselineTurn}).` : null;
   return messages.map((m, i) => {
     if (m.role !== 'user' || i === lastUserIdx) return m;
+    if (anchorPrefix && m.content.some(c => c.type === 'text' && c.text.startsWith(anchorPrefix))) return m;
     const newContent = m.content.map(c => {
       if (c.type !== 'text' || !c.text.includes(SNAPSHOT_BEGIN)) return c;
-      return { ...c, text: c.text.replace(re, SCRUBBED_SNAPSHOT) };
+      return { ...c, text: c.text.replace(snapRe, SCRUBBED_SNAPSHOT) };
     });
     return { ...m, content: newContent };
   });

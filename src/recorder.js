@@ -24,6 +24,7 @@ export async function record(goal, modelId, verifierModelId, result, outDir = 'r
     },
     steps: result.history,
     warnings: result.warnings,
+    snapshotStats: result.snapshotStats,
   };
   await writeFile(filepath, JSON.stringify(payload, null, 2), 'utf8');
   return filepath;

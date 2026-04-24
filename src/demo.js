@@ -4,6 +4,7 @@
 import { chromium } from 'playwright';
 import { getModel } from '@mariozechner/pi-ai';
 import { runTodo } from './executor.js';
+import { record } from './recorder.js';
 
 const modelId = process.env.LLM_MODEL;
 const apiKey = process.env.LLM_API_KEY;
@@ -39,6 +40,9 @@ try {
   else if (result.outcome === 'fail') console.log(`FAIL: ${result.reason}`);
   else console.log(`STUCK: hit turn cap`);
   for (const w of result.warnings) console.log(`⚠  WARNING: ${w}`);
+
+  const traceFile = await record(goal, modelId, result);
+  console.log(`trace: ${traceFile}`);
 } finally {
   await browser.close();
 }

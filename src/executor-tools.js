@@ -112,7 +112,11 @@ try {
   console.log(`turns: ${turns}`);
   if (finalSummary !== null) console.log(`PASS: ${finalSummary}`);
   else if (finalFailure !== null) console.log(`FAIL: ${finalFailure}`);
-  else console.log(`STUCK: hit turn cap (${MAX_TURNS})`);
+  else if (turns >= MAX_TURNS) console.log(`STUCK: hit turn cap (${MAX_TURNS})`);
+  else console.log(`STUCK: agent ended early without done/fail (${turns} turns)`);
+  const lastAssistant = [...agent.state.messages].reverse().find(m => m.role === 'assistant');
+  const lastText = lastAssistant?.content.filter(c => c.type === 'text').map(c => c.text).join('') ?? '';
+  if (lastText) console.log(`last assistant text: ${lastText.slice(0, 500)}`);
 } finally {
   await browser.close();
 }

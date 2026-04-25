@@ -39,7 +39,7 @@ Modules (each is one file, one or two exports, no classes):
 - No folders until a module outgrows a file.
 - No TypeScript until something breaks without it.
 - No config objects — function arguments only.
-- Each module: max two exports; if more are needed, split or simplify.
 - Under 200 lines for the MVP.
+- Simplicity is better than abstraction
 - ES modules (`"type": "module"` in package.json).
 - LLM calls go through OpenRouter (model-agnostic).

@@ -238,10 +238,20 @@ Exit codes: 0 pass | 1 fail | 2 config error | 3 runtime error
 ## Open questions
 
 1. **User config path** — `~/.qagent/config.json` (simple dotfile) or XDG `~/.config/qagent/config.json` (Linux-friendly)? Default to the dotfile?
+Answer: We do the linux friendly .config approach
+
 2. **`config` subcommand surface in v1** — ship the full set (`set / get / list / path / edit / unset`) from day one, or start with just `set` + `edit` and grow as needed?
+Answer: We do set - which sets it, or edits it if its present
+Plus list, to print the config
+
 3. **Storing the API key in JSON** — acceptable, or should keys be env-only and the user config hold model preferences only? (Pi-mono stores them; agent-browser does too. KISS says yes, but a security-conscious user might want env-only.)
+Answer: We will store them. If users dont want to, they dont have to
+
 4. **Default model** — pick a sensible built-in fallback (e.g. `anthropic/claude-sonnet-4-5`) or refuse to run without explicit configuration?
+Answer: For now: refuse to run and point to the config, how to set it
+
 5. **Scope flag naming** — `--project` (with user being implicit default) or symmetric `--user` / `--project` like git's `--global` / `--local`?
+Answer: not sure what you mean, do what you think is better
 
 ---
 

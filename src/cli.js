@@ -5,9 +5,12 @@ import { fileURLToPath } from 'node:url';
 import { getModel } from '@mariozechner/pi-ai';
 import { launchPage } from './browser.js';
 import { ConfigError, loadConfig } from './config.js';
+import { runConfigCommand } from './config-cmd.js';
 import { runTodo } from './executor.js';
 
-const HELP = `Usage: qagent [options] "<goal>"
+const HELP = `Usage:
+  qagent [options] "<goal>"             Run a goal
+  qagent config <subcommand> [args]     Manage user/project config (try: qagent config --help)
 
 Options:
   --model <id>           LLM model (or env QAGENT_MODEL)
@@ -70,7 +73,11 @@ function readVersion() {
 }
 
 async function main() {
-  const { flags, positional } = parseArgs(process.argv.slice(2));
+  const rawArgs = process.argv.slice(2);
+  if (rawArgs[0] === 'config') {
+    return runConfigCommand({ argv: rawArgs.slice(1), cwd: process.cwd(), env: process.env });
+  }
+  const { flags, positional } = parseArgs(rawArgs);
 
   if (flags.help) { process.stdout.write(HELP + '\n'); return 0; }
   if (flags.version) { process.stdout.write(readVersion() + '\n'); return 0; }

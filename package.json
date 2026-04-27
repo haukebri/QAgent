@@ -13,6 +13,9 @@
     "url": "https://github.com/haukebri/QAgent/issues"
   },
   "type": "module",
+  "bin": {
+    "qagent": "src/cli.js"
+  },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },

@@ -13,15 +13,18 @@ This document proposes the CLI surface — what to build, what to copy from `pi-
 ## What we learned from the references
 
 ### pi-mono (the gold standard for LLM-agent CLIs)
+
 - **Single binary, mode-based**: positional arg is the work itself; modes (`--print`, `--mode json`, `--mode text`, `--mode rpc`) cover human and machine consumption from one entry point.
 - **API key layering**: `auth.json` (file-locked, `0o600`) → provider config → env vars → `--api-key`.
 - **Unknown flags don't crash** — captured for extensions.
 
 ### agent-browser
+
 - **JSON config + JSON Schema**: `~/.agent-browser/config.json` (user) overlaid by `./agent-browser.json` (project), CLI flags win.
 - Designed for upstream orchestration; doesn't own the agentic loop.
 
 ### Playwright
+
 - **Composable reporters**: `--reporter=list,json,html`. Multiple reporters in one run.
 - Code-driven config (`playwright.config.ts`), discovered in cwd. Implicit exit codes (0 / 1).
 - No built-in credential handling — auth is the test's job.
@@ -30,13 +33,15 @@ This document proposes the CLI surface — what to build, what to copy from `pi-
 
 ## Design decisions
 
-### 1. Project & binary name
+### 1. Project & binary name DONE
+
 - Project: **QAgent**
 - npm package: `qagent` (overrides the existing one)
 - Binary: `qagent`
 - Repo: rename to `qagent` when convenient
 
 ### 2. Single binary, goal-first, with a `config` subcommand
+
 **Choice:** The runner has one mode — positional arg is the goal text:
 
 ```bash
@@ -49,7 +54,9 @@ No spec files, no directories of specs, no multi-goal batches in v1. Spec format
 A separate `config` subcommand handles read/write of the user and project config files (covered in §3 below). This isn't "modes for running tests" — it's the sibling utility every CLI of this shape ships (`git config`, `npm config`, `gh config`, `pi config`).
 
 ### 3. Three-layer config: flags > project > user
+
 **Resolution order** (highest priority first):
+
 1. **CLI flags** — `--model`, `--api-key`, etc.
 2. **Env vars** — `QAGENT_API_KEY`, `OPENROUTER_API_KEY`, `QAGENT_MODEL`
 3. **Project config** — `./qagent.config.json` in cwd (optional)
@@ -59,6 +66,7 @@ A separate `config` subcommand handles read/write of the user and project config
 The user config is the headline feature: install once, set `model` and `apiKey` once, then run `qagent "<goal>"` in any project without further setup.
 
 #### User config: `~/.qagent/config.json`
+
 ```json
 {
   "model": "anthropic/claude-sonnet-4-5",
@@ -66,11 +74,13 @@ The user config is the headline feature: install once, set `model` and `apiKey` 
   "apiKey": "sk-or-..."
 }
 ```
+
 - File-mode `0o600` (set automatically when written via `qagent config`).
 - JSON, not JS — declarative, parse-safe, no toolchain.
 - Created and edited via the `config` subcommand (see below); hand-editing is fine too.
 
 #### Project config: `./qagent.config.json`
+
 Same schema; cwd-only, no walk-up. Used to pin a specific model for a given project, override turn caps, etc. Almost always omitted.
 
 ```json
@@ -82,6 +92,7 @@ Same schema; cwd-only, no walk-up. Used to pin a specific model for a given proj
 ```
 
 #### Managing config: the `config` subcommand
+
 Modeled on `git config` / `npm config`. Default scope is the **user** config; pass `--project` to write the project config in cwd.
 
 ```bash
@@ -99,13 +110,17 @@ qagent config unset apiKey
 Writes use `0o600` for the user config and create the parent directory if missing.
 
 #### Why JSON, not JS
+
 Playwright's `defineConfig` is powerful but pulls in a TS/JS runtime story we don't need. JSON Schema gives us IDE validation for free.
 
 #### Why cwd-only for the project config
+
 Walk-up surprises users (loads config from a parent repo). Strict beats clever.
 
 ### 4. API key resolution
+
 **Precedence (highest first):**
+
 1. `--api-key <key>` flag
 2. `QAGENT_API_KEY` env var
 3. `OPENROUTER_API_KEY` env var
@@ -113,6 +128,7 @@ Walk-up surprises users (loads config from a parent repo). Strict beats clever.
 5. User config `apiKey`
 
 **Error UX when nothing is found:**
+
 ```
 qagent: no API key found.
 Run `qagent config set apiKey <key>` or set QAGENT_API_KEY / OPENROUTER_API_KEY.
@@ -123,6 +139,7 @@ Exit 2.
 Avoid pi-mono's file-locked `auth.json` for now — overkill for a runner that fires occasionally. Plain JSON in user config is fine; we set `0o600` and document it.
 
 ### 5. Reporters: composable, opt-in trace
+
 **Default: `list` only.** No file is written unless the user asks for it.
 
 | Reporter | Output | Use case |
@@ -137,6 +154,7 @@ Compose with comma: `--reporter=list,trace`, `--reporter=ndjson`.
 **On the `--report` question:** No binary `--report` flag. The composable list subsumes it. Critically, **trace is no longer on by default** — running `qagent "<goal>"` in a fresh project must not litter `results/` files. An agent or developer who wants the trace asks for it.
 
 ### 6. AI-agent / Claude Code friendliness
+
 - `--reporter=ndjson` → one JSON event per line on stdout. Each line parseable independently. Errors → stderr.
 - `--print` / `-p` → suppresses live progress; emits only the final result envelope.
 - **Stable exit codes:**
@@ -146,6 +164,7 @@ Compose with comma: `--reporter=list,trace`, `--reporter=ndjson`.
   - `3` — runtime error (browser crash, network)
 - All config keys overridable as flags (`--model`, `--max-turns`, `--headed`).
 - Final NDJSON event is a tiny envelope an agent can grep for:
+
   ```
   {"event":"done","goal":"...","outcome":"pass","turns":12,"cost":0.04}
   ```
@@ -153,6 +172,7 @@ Compose with comma: `--reporter=list,trace`, `--reporter=ndjson`.
 The most common agent integration will be Claude Code running `qagent "<goal>" --reporter=ndjson` and reading stdout turn by turn.
 
 ### 7. Multi-project UX
+
 - `npm i -g qagent` → `qagent` available everywhere.
 - User runs `qagent config set model <id>` and `qagent config set apiKey <key>` once, then `qagent "<goal>"` works in any project.
 - Per-project `qagent.config.json` only when a project genuinely diverges (different model, higher turn cap).

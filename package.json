@@ -1,6 +1,6 @@
 {
   "name": "qagent",
-  "version": "1.0.0",
+  "version": "0.4.0",
   "description": "AI-driven end-to-end test runner: prose goals, LLM picks actions, Playwright drives the browser, verifiers are pure code.",
   "author": "Hauke Brinkmann",
   "license": "MIT",

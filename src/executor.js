@@ -37,7 +37,7 @@ const SYSTEM_PROMPT =
   'In the latest snapshot, a section body may read "# unchanged since turn N" — that section is byte-identical to the baseline anchor\'s, ' +
   'so its refs are the SAME numbers as in the anchor. Look up element details there.';
 
-export async function runTodo(page, goal, model, apiKey, maxTurns = 20, verifierModel = null) {
+export async function runTodo(page, goal, model, apiKey, maxTurns = 20, verifierModel = null, onTurn = null) {
   const t0 = Date.now();
 
   const scrubState = { baselineTurn: 0 };
@@ -130,7 +130,9 @@ export async function runTodo(page, goal, model, apiKey, maxTurns = 20, verifier
       if ((action.action === 'click' || action.action === 'fill') && action.ref) {
         if (!snapshot.includes(`[ref=${action.ref}]`)) {
           lastError = `ref ${action.ref} is not present in the current snapshot; pick a ref from the latest snapshot above`;
-          history.push({ turn: turns, atMs: Date.now() - t0, action, url, error: lastError });
+          const refMissEntry = { turn: turns, atMs: Date.now() - t0, action, url, error: lastError };
+          history.push(refMissEntry);
+          onTurn?.(refMissEntry);
           continue;
         }
       }
@@ -150,6 +152,7 @@ export async function runTodo(page, goal, model, apiKey, maxTurns = 20, verifier
         entry.ms = Date.now() - tAction;
         entry.url = page.url();
         history.push(entry);
+        onTurn?.(entry);
         lastError = null;
       } catch (err) {
         lastError = err.message.split('\n')[0];
@@ -157,6 +160,7 @@ export async function runTodo(page, goal, model, apiKey, maxTurns = 20, verifier
         entry.url = page.url();
         entry.error = lastError;
         history.push(entry);
+        onTurn?.(entry);
       }
     } catch (err) {
       fatalError = err.message.split('\n')[0];

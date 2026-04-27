@@ -8,13 +8,19 @@ const USER_CONFIG_PATH = resolve(homedir(), '.config', 'qagent', 'config.json');
 const PROJECT_CONFIG_NAME = 'qagent.config.json';
 
 const KNOWN_KEYS = {
-  model: 'string',
-  verifierModel: 'string',
-  apiKey: 'string',
-  maxTurns: 'number',
+  model: { type: 'string' },
+  verifierModel: { type: 'string' },
+  apiKey: { type: 'string' },
+  maxTurns: { type: 'number' },
+  reporter: { type: 'array' },
+  outputDir: { type: 'string' },
+  headed: { type: 'boolean' },
 };
 
 export const KEY_LIST = Object.keys(KNOWN_KEYS);
+export const KEY_TYPES = Object.fromEntries(
+  Object.entries(KNOWN_KEYS).map(([k, v]) => [k, v.type]),
+);
 
 function readJson(path) {
   let raw;
@@ -48,18 +54,36 @@ export function loadConfig({ cwd } = {}) {
   return { user, project };
 }
 
-export function setConfigValue({ scope, key, value, cwd }) {
-  if (!(key in KNOWN_KEYS)) {
-    throw new ConfigError(`unknown key "${key}". Valid keys: ${KEY_LIST.join(', ')}.`);
-  }
-  let coerced = value;
-  if (KNOWN_KEYS[key] === 'number') {
+function coerceValue(key, value) {
+  const type = KNOWN_KEYS[key].type;
+  if (type === 'string') return String(value);
+  if (type === 'number') {
     const n = Number(value);
     if (!Number.isInteger(n) || n <= 0) {
       throw new ConfigError(`${key} must be a positive integer, got "${value}"`);
     }
-    coerced = n;
+    return n;
   }
+  if (type === 'boolean') {
+    if (value === 'true' || value === '1' || value === true) return true;
+    if (value === 'false' || value === '0' || value === false) return false;
+    throw new ConfigError(`${key} must be true or false, got "${value}"`);
+  }
+  if (type === 'array') {
+    if (Array.isArray(value)) return value;
+    return String(value)
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+  }
+  throw new ConfigError(`internal: unknown type ${type} for key ${key}`);
+}
+
+export function setConfigValue({ scope, key, value, cwd }) {
+  if (!(key in KNOWN_KEYS)) {
+    throw new ConfigError(`unknown key "${key}". Valid keys: ${KEY_LIST.join(', ')}.`);
+  }
+  const coerced = coerceValue(key, value);
   const path = configPath(scope, cwd);
   mkdirSync(dirname(path), { recursive: true });
   const existing = readJson(path);

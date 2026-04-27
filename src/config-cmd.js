@@ -1,25 +1,68 @@
 import { existsSync } from 'node:fs';
-import { ConfigError, KEY_LIST, configPath, loadConfig, setConfigValue } from './config.js';
-
-const HELP = `Usage:
-  qagent config set [--project] <key> <value>   Write a config value
-  qagent config list                            Print effective config + sources
-
-Keys: ${KEY_LIST.join(', ')}
-
-Default scope is the user config (~/.config/qagent/config.json).
-Use --project to target ./qagent.config.json instead.`;
+import { ConfigError, KEY_LIST, KEY_TYPES, configPath, loadConfig, setConfigValue } from './config.js';
+import { KNOWN_REPORTERS } from './reporters.js';
 
 const ENV_LOOKUP = {
   model: ['QAGENT_MODEL'],
   verifierModel: [],
   apiKey: ['QAGENT_API_KEY', 'OPENROUTER_API_KEY'],
   maxTurns: [],
+  reporter: [],
+  outputDir: [],
+  headed: [],
 };
 
 const DEFAULTS = {
   maxTurns: 50,
+  reporter: ['list'],
+  outputDir: 'results',
+  headed: false,
 };
+
+const KEY_DOCS = {
+  model:         'OpenRouter LLM model id (e.g. anthropic/claude-sonnet-4-5)',
+  verifierModel: 'Verifier model id; defaults to model when unset',
+  apiKey:        'OpenRouter API key (sk-or-...)',
+  maxTurns:      'Positive integer turn cap',
+  reporter:      `Comma-separated; values: ${KNOWN_REPORTERS.join(', ')}`,
+  outputDir:     'Path where the trace reporter writes files',
+  headed:        'Show browser window; accepts true|false or 1|0',
+};
+
+const ENV_HINTS = {
+  model: 'env QAGENT_MODEL',
+  apiKey: 'env QAGENT_API_KEY / OPENROUTER_API_KEY',
+};
+
+function formatDefault(v) {
+  if (v === undefined) return '';
+  if (Array.isArray(v)) return v.join(',');
+  return String(v);
+}
+
+function buildHelp() {
+  const rows = KEY_LIST.map((k) => {
+    const def = formatDefault(DEFAULTS[k]);
+    const envHint = ENV_HINTS[k] ? ` [${ENV_HINTS[k]}]` : '';
+    const defHint = def ? ` (default: ${def})` : '';
+    return { key: k, type: KEY_TYPES[k], doc: KEY_DOCS[k] + defHint + envHint };
+  });
+  const keyW = Math.max(...rows.map((r) => r.key.length));
+  const typeW = Math.max(...rows.map((r) => r.type.length));
+  const lines = rows.map((r) => `  ${r.key.padEnd(keyW)}  ${r.type.padEnd(typeW)}  ${r.doc}`);
+  return `Usage:
+  qagent config set [--project] <key> <value>   Write a config value
+  qagent config list                            Print effective config + sources
+
+Keys:
+${lines.join('\n')}
+
+Resolution: flag > env > project > user > default
+Default scope for set/list is the user config (~/.config/qagent/config.json).
+Use --project to target ./qagent.config.json instead.`;
+}
+
+const HELP = buildHelp();
 
 function redactApiKey(value) {
   if (typeof value !== 'string') return '***';
@@ -29,7 +72,10 @@ function redactApiKey(value) {
 
 function display(key, value) {
   if (value === undefined) return '(unset)';
-  return key === 'apiKey' ? redactApiKey(value) : String(value);
+  if (key === 'apiKey') return redactApiKey(value);
+  if (Array.isArray(value)) return value.join(',');
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  return String(value);
 }
 
 function resolveOne(key, env, project, user) {

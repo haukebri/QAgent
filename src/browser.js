@@ -7,13 +7,14 @@ import { chromium } from 'playwright';
 const USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
-export async function launchPage({ httpCredentials } = {}) {
+export async function launchPage({ httpCredentials, headed = false } = {}) {
   const args = ['--disable-blink-features=AutomationControlled'];
+  const headless = !headed;
   let browser;
   try {
-    browser = await chromium.launch({ channel: 'chrome', args });
+    browser = await chromium.launch({ channel: 'chrome', args, headless });
   } catch {
-    browser = await chromium.launch({ args });
+    browser = await chromium.launch({ args, headless });
   }
   const context = await browser.newContext({
     userAgent: USER_AGENT,

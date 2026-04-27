@@ -7,6 +7,7 @@ import { launchPage } from './browser.js';
 import { ConfigError, loadConfig } from './config.js';
 import { runConfigCommand } from './config-cmd.js';
 import { runTodo } from './executor.js';
+import { KNOWN_REPORTERS, selectReporters } from './reporters.js';
 
 const HELP = `Usage:
   qagent [options] "<goal>"             Run a goal
@@ -17,7 +18,9 @@ Options:
   --verifier-model <id>  Verifier model (defaults to --model)
   --api-key <key>        OpenRouter key (or env QAGENT_API_KEY / OPENROUTER_API_KEY)
   --max-turns <n>        Turn cap (default 50)
-  --headed               Show browser window (no-op for now)
+  --reporter <list>      Comma-separated: list,json,ndjson,trace (default list)
+  --output-dir <path>    Where trace files land (default results/, used with trace)
+  --headed               Show browser window
   --version, -v          Print version
   --help, -h             Print this help
 
@@ -32,10 +35,12 @@ const VALUE_FLAGS = {
   '--verifier-model': 'verifierModel',
   '--api-key': 'apiKey',
   '--max-turns': 'maxTurns',
+  '--reporter': 'reporter',
+  '--output-dir': 'outputDir',
 };
 
 function parseArgs(argv) {
-  const flags = { headed: false };
+  const flags = {};
   const positional = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -52,6 +57,14 @@ function parseArgs(argv) {
         const n = Number(v);
         if (!Number.isFinite(n) || n <= 0) throw new ConfigError(`--max-turns must be a positive number, got "${v}"`);
         flags[key] = n;
+      } else if (key === 'reporter') {
+        const names = v.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+        for (const n of names) {
+          if (!KNOWN_REPORTERS.includes(n)) {
+            throw new ConfigError(`unknown reporter: ${n}. Valid: ${KNOWN_REPORTERS.join(', ')}`);
+          }
+        }
+        flags[key] = names;
       } else {
         flags[key] = v;
       }
@@ -111,6 +124,15 @@ async function main() {
   const verifierModelId =
     flags.verifierModel ?? project.verifierModel ?? user.verifierModel ?? modelId;
   const maxTurns = flags.maxTurns ?? project.maxTurns ?? user.maxTurns ?? 50;
+  const reporterNames = flags.reporter ?? project.reporter ?? user.reporter ?? ['list'];
+  for (const n of reporterNames) {
+    if (!KNOWN_REPORTERS.includes(n)) {
+      throw new ConfigError(`unknown reporter "${n}" in config. Valid: ${KNOWN_REPORTERS.join(', ')}`);
+    }
+  }
+  const outputDir = flags.outputDir ?? project.outputDir ?? user.outputDir ?? 'results';
+  const headed = flags.headed ?? project.headed ?? user.headed ?? false;
+
   const model = getModel('openrouter', modelId);
   if (!model) throw new ConfigError(`unknown model: ${modelId}`);
   const verifierModel = getModel('openrouter', verifierModelId);
@@ -121,11 +143,16 @@ async function main() {
       ? { username: process.env.BASIC_AUTH_USER, password: process.env.BASIC_AUTH_PASS }
       : undefined;
 
-  const { browser, page } = await launchPage({ httpCredentials });
+  const reporters = selectReporters(reporterNames, { outputDir });
+  const onTurn = reporters.some((r) => r.onTurn)
+    ? (h) => { for (const r of reporters) r.onTurn?.(h); }
+    : null;
+
+  const { browser, page } = await launchPage({ httpCredentials, headed });
   try {
     let result;
     try {
-      result = await runTodo(page, goal, model, apiKey, maxTurns, verifierModel);
+      result = await runTodo(page, goal, model, apiKey, maxTurns, verifierModel, onTurn);
     } catch (err) {
       result = {
         outcome: 'error',
@@ -141,32 +168,10 @@ async function main() {
       };
     }
 
-    for (const h of result.history) {
-      const target = h.target ? ` [${h.target}]` : '';
-      const url = h.url ? ` @ ${h.url}` : '';
-      const extra = h.error ? ` -> error: ${h.error}` : '';
-      console.log(`turn ${h.turn}: ${JSON.stringify(h.action)}${target}${url}${extra}`);
+    const ctx = { goal, modelId, verifierModelId };
+    for (const r of reporters) {
+      await r.onEnd?.(result, ctx);
     }
-
-    const elapsedS = (result.elapsedMs / 1000).toFixed(1);
-    const perTurn = result.turns ? (result.elapsedMs / result.turns / 1000).toFixed(1) : '-';
-    console.log(`\nfinal url: ${result.finalUrl}`);
-    console.log(`turns: ${result.turns} | elapsed: ${elapsedS}s | avg/turn: ${perTurn}s`);
-    const t = result.tokens;
-    console.log(`tokens: ${t.totalTokens} (in=${t.input}, out=${t.output}) | cost: $${t.cost.toFixed(4)}`);
-    if (result.verifierTokens) {
-      const v = result.verifierTokens;
-      console.log(`verifier: ${v.totalTokens} (in=${v.input}, out=${v.output}) | cost: $${v.cost.toFixed(4)}`);
-    }
-    if (result.llmVerdict) {
-      const lv = result.llmVerdict;
-      const extra = lv.summary ?? lv.reason ?? '';
-      console.log(`driver verdict: ${lv.action}${extra ? ` — ${extra}` : ''}`);
-    }
-    if (result.outcome === 'pass') console.log(`PASS: ${result.evidence}`);
-    else if (result.outcome === 'fail') console.log(`FAIL: ${result.evidence}`);
-    else console.log(`ERROR: ${result.evidence}`);
-    for (const w of result.warnings ?? []) console.log(`WARNING: ${w}`);
 
     if (result.outcome === 'pass') return 0;
     if (result.outcome === 'fail') return 1;

@@ -4,6 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getModel } from '@mariozechner/pi-ai';
 import { launchPage } from './browser.js';
+import { ConfigError, loadConfig } from './config.js';
 import { runTodo } from './executor.js';
 
 const HELP = `Usage: qagent [options] "<goal>"
@@ -23,8 +24,6 @@ Environment:
 
 Exit: 0 pass | 1 fail | 2 config error | 3 runtime error`;
 
-class ConfigError extends Error {}
-
 const VALUE_FLAGS = {
   '--model': 'model',
   '--verifier-model': 'verifierModel',
@@ -33,7 +32,7 @@ const VALUE_FLAGS = {
 };
 
 function parseArgs(argv) {
-  const flags = { headed: false, maxTurns: 50 };
+  const flags = { headed: false };
   const positional = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -85,17 +84,26 @@ async function main() {
   }
   const goal = positional[0];
 
-  const modelId = flags.model ?? process.env.QAGENT_MODEL;
-  if (!modelId) throw new ConfigError('no model. Pass --model or set QAGENT_MODEL.');
+  const { user, project } = loadConfig({ cwd: process.cwd() });
 
-  const apiKey = flags.apiKey ?? process.env.QAGENT_API_KEY ?? process.env.OPENROUTER_API_KEY;
+  const modelId = flags.model ?? process.env.QAGENT_MODEL ?? project.model ?? user.model;
+  if (!modelId) throw new ConfigError('no model. Pass --model, set QAGENT_MODEL, or set "model" in qagent.config.json / ~/.config/qagent/config.json.');
+
+  const apiKey =
+    flags.apiKey ??
+    process.env.QAGENT_API_KEY ??
+    process.env.OPENROUTER_API_KEY ??
+    project.apiKey ??
+    user.apiKey;
   if (!apiKey) {
     throw new ConfigError(
-      'no API key found.\nPass --api-key or set QAGENT_API_KEY / OPENROUTER_API_KEY.\nSee https://openrouter.ai/keys',
+      'no API key found.\nPass --api-key, set QAGENT_API_KEY / OPENROUTER_API_KEY, or set "apiKey" in qagent.config.json / ~/.config/qagent/config.json.\nSee https://openrouter.ai/keys',
     );
   }
 
-  const verifierModelId = flags.verifierModel ?? modelId;
+  const verifierModelId =
+    flags.verifierModel ?? project.verifierModel ?? user.verifierModel ?? modelId;
+  const maxTurns = flags.maxTurns ?? project.maxTurns ?? user.maxTurns ?? 50;
   const model = getModel('openrouter', modelId);
   if (!model) throw new ConfigError(`unknown model: ${modelId}`);
   const verifierModel = getModel('openrouter', verifierModelId);
@@ -110,7 +118,7 @@ async function main() {
   try {
     let result;
     try {
-      result = await runTodo(page, goal, model, apiKey, flags.maxTurns, verifierModel);
+      result = await runTodo(page, goal, model, apiKey, maxTurns, verifierModel);
     } catch (err) {
       result = {
         outcome: 'error',

@@ -10,6 +10,19 @@ This document proposes the CLI surface — what to build, what to copy from `pi-
 
 ---
 
+## Status (2026-04-27)
+
+Built incrementally. Milestones 1 and 2 shipped; rest pending.
+
+- **Milestone 1 — Bare binary** [done] (commit `8a358ed`). `qagent "<goal>"` runs the executor end-to-end with `--model` / `--verifier-model` / `--api-key` / `--max-turns` / `--headed` (no-op for now) / `--version` / `--help` flags. Reads `QAGENT_MODEL`, `QAGENT_API_KEY`, `OPENROUTER_API_KEY` from env. Exit codes 0/1/2/3. **No trace file by default** (behavior change from `demo.js`). Unknown flags warn but don't crash. `bin: { qagent: "src/cli.js" }` in `package.json`.
+- **Milestone 2 — Config layering** [done]. `src/config.js` reads `~/.config/qagent/config.json` (user, XDG-style) and `./qagent.config.json` (project, cwd-only, no walk-up). Precedence per §3: flag > env > project > user. Hand-edited JSON; missing files = empty; malformed JSON = exit 2 with file path. Unknown keys silently ignored. Recognized keys: `model`, `verifierModel`, `apiKey`, `maxTurns`.
+- **Milestone 3 — `config` subcommand** [pending]. `set` (creates or edits the value in place) and `list` (prints the resolved config). `--project` scope flag. `0o600` on writes.
+- **Milestone 4 — Reporter system** [pending]. `--reporter=list,json,ndjson,trace` composition. `trace` reporter wraps existing `record()`. `ndjson` for agent integration.
+- **Milestone 5 — Agent ergonomics** [pending]. `--print` / `-p`, final `done` envelope event for ndjson.
+- **`demo.js`** still in tree and works unchanged (`LLM_MODEL` / `LLM_API_KEY` env via `--env-file=.env`). Removal deferred until user signal.
+
+---
+
 ## What we learned from the references
 
 ### pi-mono (the gold standard for LLM-agent CLIs)
@@ -60,12 +73,12 @@ A separate `config` subcommand handles read/write of the user and project config
 1. **CLI flags** — `--model`, `--api-key`, etc.
 2. **Env vars** — `QAGENT_API_KEY`, `OPENROUTER_API_KEY`, `QAGENT_MODEL`
 3. **Project config** — `./qagent.config.json` in cwd (optional)
-4. **User config** — `~/.qagent/config.json` (optional, but the typical setup)
+4. **User config** — `~/.config/qagent/config.json` (optional, but the typical setup)
 5. **Built-in defaults**
 
 The user config is the headline feature: install once, set `model` and `apiKey` once, then run `qagent "<goal>"` in any project without further setup.
 
-#### User config: `~/.qagent/config.json`
+#### User config: `~/.config/qagent/config.json`
 
 ```json
 {
@@ -225,7 +238,7 @@ Exit codes: 0 pass | 1 fail | 2 config error | 3 runtime error
 ## Verification (how we validate the CLI end-to-end)
 
 1. **Smoke (existing flow still works):** with user config set, `qagent "Open google.com and verify the search box exists"` → exit 0, list reporter shows ✓, **no trace file written**.
-2. **User config:** `~/.qagent/config.json` with `model` + `apiKey` → fresh shell, no env vars → `qagent "..."` runs cleanly.
+2. **User config:** `~/.config/qagent/config.json` with `model` + `apiKey` → fresh shell, no env vars → `qagent "..."` runs cleanly.
 3. **Project override:** drop `qagent.config.json` with a different `model` → that model is used; user config supplies the API key.
 4. **Flag override:** `qagent "..." --model X` overrides both configs.
 5. **Trace opt-in:** `qagent "..." --reporter=list,trace` → trace JSON appears under `results/`.

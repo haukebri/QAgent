@@ -4,7 +4,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## Project Overview
 
-QA-Runner is an AI-driven test runner where tests are written in natural language and an LLM drives the browser via Playwright. The LLM picks actions; verifiers are pure code, not LLM.
+QAgent is an AI-driven test runner where tests are written in natural language and an LLM drives the browser via Playwright. The LLM picks actions; verifiers are pure code, not LLM.
 
 See `docs/project-goal.md` for goals and `docs/project-architecture.md` for the full architecture spec.
 

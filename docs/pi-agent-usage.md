@@ -2,7 +2,7 @@
 
 Version: `@mariozechner/pi-agent-core@0.70.0` + `@mariozechner/pi-ai@0.70.0`.
 
-Companion to `docs/playwright-usage.md`. This covers how QA-Runner uses pi-agent / pi-ai for the LLM loop. Every claim below is verified against `pi-mono@0.70.0` source (`packages/agent/src/{agent,agent-loop,types}.ts`, `packages/ai/src/{env-api-keys,models,types,index}.ts`).
+Companion to `docs/playwright-usage.md`. This covers how QAgent uses pi-agent / pi-ai for the LLM loop. Every claim below is verified against `pi-mono@0.70.0` source (`packages/agent/src/{agent,agent-loop,types}.ts`, `packages/ai/src/{env-api-keys,models,types,index}.ts`).
 
 ## the key insight
 

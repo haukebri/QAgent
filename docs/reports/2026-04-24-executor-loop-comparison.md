@@ -5,7 +5,7 @@ Status: decided — advisor-driven (Option B) selected
 
 ## Context
 
-QA-Runner's executor takes a goal + a Playwright `page` and drives the browser toward the goal via an LLM. Before picking a single implementation, we wanted empirical data on two fundamentally different control-flow designs, because the choice affects cost, robustness, and model-range — all of which matter for this project (natural-language tests, model-agnostic via OpenRouter, "small local models eventually").
+QAgent's executor takes a goal + a Playwright `page` and drives the browser toward the goal via an LLM. Before picking a single implementation, we wanted empirical data on two fundamentally different control-flow designs, because the choice affects cost, robustness, and model-range — all of which matter for this project (natural-language tests, model-agnostic via OpenRouter, "small local models eventually").
 
 ## The two approaches
 

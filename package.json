@@ -1,14 +1,22 @@
 {
-  "name": "qa-runner",
+  "name": "qagent",
   "version": "1.0.0",
-  "description": "",
+  "description": "AI-driven end-to-end test runner: prose goals, LLM picks actions, Playwright drives the browser, verifiers are pure code.",
+  "author": "Hauke Brinkmann",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/haukebri/QAgent.git"
+  },
+  "homepage": "https://github.com/haukebri/QAgent#readme",
+  "bugs": {
+    "url": "https://github.com/haukebri/QAgent/issues"
+  },
+  "type": "module",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "module",
   "dependencies": {
     "@mariozechner/pi-agent-core": "0.70.0",
     "@mariozechner/pi-ai": "0.70.0",

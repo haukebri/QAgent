@@ -4,18 +4,11 @@ Items surfaced by the README review (4 personas: AI user, architect, devops, PM)
 
 ## Code / behavior
 
-### 1. ndjson `done` envelope: `cost` and `totalTokens` are driver-only
+### 1. ndjson `done` envelope: `cost` and `totalTokens` are driver-only ✅ done
 
-`src/reporters.js` — `ndjsonReporter().onEnd` populates:
+`src/reporters.js` — `ndjsonReporter().onEnd` previously emitted only the **executor (driver)** numbers as `cost` / `totalTokens`, silently dropping the **verifier**'s tokens and cost (`result.verifierTokens`). The `list` reporter summed them in its footer, so the two reporters disagreed on the same run.
 
-```js
-cost: result.tokens?.cost ?? 0,
-totalTokens: result.tokens?.totalTokens ?? 0,
-```
-
-These are the **executor (driver)** numbers. The **verifier**'s tokens and cost (`result.verifierTokens`) are silently dropped from the ndjson envelope, even though the `list` reporter does sum them in its footer (so the two reporters disagree on the same run).
-
-**Fix options:** sum driver + verifier into `cost` / `totalTokens`, or split into `driverCost` / `verifierCost` / `totalCost` (preferred — explicit). Either way, document in the README's ndjson schema after the fix lands.
+**Resolution:** the `done` envelope now emits explicit, non-overlapping fields: `driverCost` / `verifierCost` / `totalCost` and `driverTokens` / `verifierTokens` / `totalTokens`. README ndjson schema updated to match.
 
 Source: AI-user reviewer (asked what `cost` units / scope mean).
 
@@ -53,13 +46,9 @@ Source: Architect reviewer (questioning the README's "verifiers are pure code" c
 
 ## Documentation (outside the README)
 
-### 6. `CLAUDE.md` falsely says verifier is pure code
+### 6. `CLAUDE.md` falsely says verifier is pure code ✅ done
 
-Line 30 of `CLAUDE.md`:
-
-> | verifier.js | End-state checks (pure code, no LLM) | — |
-
-Same bug as the README. The README is being fixed in this round; `CLAUDE.md` should be corrected in the same spirit (the verifier is an LLM judge per `src/verifier.js`).
+Both the project-overview line and the module table in `CLAUDE.md` claimed the verifier was pure code. Corrected to reflect that `src/verifier.js` is an LLM judge (separate model from the driver, takes goal + trajectory + final snapshot, returns `{outcome, evidence}`).
 
 Source: Architect reviewer.
 

@@ -109,6 +109,10 @@ function ndjsonReporter() {
       process.stdout.write(JSON.stringify({ event: 'turn', ...h }) + '\n');
     },
     onEnd(result, ctx) {
+      const driverCost = result.tokens?.cost ?? 0;
+      const verifierCost = result.verifierTokens?.cost ?? 0;
+      const driverTokens = result.tokens?.totalTokens ?? 0;
+      const verifierTokens = result.verifierTokens?.totalTokens ?? 0;
       const envelope = {
         event: 'done',
         goal: ctx.goal,
@@ -116,8 +120,12 @@ function ndjsonReporter() {
         evidence: result.evidence,
         turns: result.turns,
         elapsedMs: result.elapsedMs,
-        cost: result.tokens?.cost ?? 0,
-        totalTokens: result.tokens?.totalTokens ?? 0,
+        driverCost,
+        verifierCost,
+        totalCost: driverCost + verifierCost,
+        driverTokens,
+        verifierTokens,
+        totalTokens: driverTokens + verifierTokens,
         finalUrl: result.finalUrl,
         warnings: result.warnings ?? [],
       };

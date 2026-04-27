@@ -112,8 +112,12 @@ QAgent is built so a parent agent (Claude Code, CI scripts) can run goals and co
   "evidence": "...",               // string, the verifier's one-sentence rationale (always present)
   "turns": 2,                      // number, total LLM turns executed
   "elapsedMs": 4933,               // number, total wall time
-  "cost": 0.0001,                  // number, USD — driver only; verifier cost is currently not summed (see docs/review-followups.md)
-  "totalTokens": 1424,             // number, driver only (same caveat as cost)
+  "driverCost": 0.0001,            // number, USD — driver (executor) LLM only
+  "verifierCost": 0.00003,         // number, USD — verifier LLM only (0 if verifier didn't run)
+  "totalCost": 0.00013,            // number, USD — driverCost + verifierCost
+  "driverTokens": 1424,            // number, driver total tokens (input + output, incl. cache)
+  "verifierTokens": 320,           // number, verifier total tokens (0 if verifier didn't run)
+  "totalTokens": 1744,             // number, driverTokens + verifierTokens
   "finalUrl": "https://...",       // string
   "warnings": []                   // string[], may include verifier-fallback notices; often empty
 }

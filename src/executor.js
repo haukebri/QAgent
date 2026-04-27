@@ -124,6 +124,9 @@ export async function runTodo(page, goal, model, apiKey, maxTurns = 20, verifier
           summary: action.summary ?? null,
           reason: action.reason ?? null,
         };
+        const verdictEntry = { turn: turns, atMs: Date.now() - t0, action, url: page.url() };
+        history.push(verdictEntry);
+        onTurn?.(verdictEntry);
         break;
       }
 

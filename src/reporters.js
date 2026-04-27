@@ -14,33 +14,82 @@ function makeReporter(name, { outputDir }) {
   throw new Error(`unreachable: unknown reporter "${name}"`);
 }
 
+const isTTY = !!process.stdout.isTTY;
+const c = isTTY
+  ? {
+      dim: '\x1b[2m',
+      red: '\x1b[31m',
+      green: '\x1b[32m',
+      yellow: '\x1b[33m',
+      cyan: '\x1b[36m',
+      reset: '\x1b[0m',
+    }
+  : { dim: '', red: '', green: '', yellow: '', cyan: '', reset: '' };
+
+function fmtMs(ms) {
+  if (ms == null) return '';
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function describeAction(a, target) {
+  const tgt = target ? `"${target}"` : '';
+  switch (a.action) {
+    case 'navigate': return a.url ?? '';
+    case 'click': return tgt;
+    case 'fill': return tgt ? `${tgt} = ${JSON.stringify(a.value ?? '')}` : `= ${JSON.stringify(a.value ?? '')}`;
+    case 'wait': return `${a.ms ?? 1000}ms`;
+    case 'done': return a.summary ? `"${a.summary}"` : '';
+    case 'fail': return a.reason ? `"${a.reason}"` : '';
+    default: return JSON.stringify(a);
+  }
+}
+
 function listReporter() {
+  let lastUrl = null;
+  let lastAtMs = 0;
   return {
+    onStart(ctx) {
+      process.stdout.write(`${c.cyan}▶${c.reset} ${ctx.goal}\n\n`);
+    },
+    onTurn(h) {
+      const a = h.action ?? {};
+      const verb = (a.action ?? '?').padEnd(8);
+      const num = String(h.turn).padStart(2);
+      const indicator = h.error ? `${c.red}✗${c.reset}  ` : '   ';
+      const body = describeAction(a, h.target);
+      const turnMs = h.atMs != null ? h.atMs - lastAtMs : null;
+      const showDur = a.action !== 'wait' && turnMs != null;
+      const dur = showDur ? `  ${c.dim}${fmtMs(turnMs)}${c.reset}` : '';
+      process.stdout.write(`${indicator}${num}  ${verb}  ${body}${dur}\n`);
+      if (h.error) {
+        process.stdout.write(`       ${c.red}— ${h.error}${c.reset}\n`);
+      } else if (
+        a.action !== 'navigate' &&
+        a.action !== 'done' &&
+        a.action !== 'fail' &&
+        h.url &&
+        h.url !== lastUrl
+      ) {
+        process.stdout.write(`       ${c.cyan}→${c.reset} ${h.url}\n`);
+      }
+      if (h.url) lastUrl = h.url;
+      if (h.atMs != null) lastAtMs = h.atMs;
+    },
     onEnd(result) {
-      for (const h of result.history ?? []) {
-        const target = h.target ? ` [${h.target}]` : '';
-        const url = h.url ? ` @ ${h.url}` : '';
-        const extra = h.error ? ` -> error: ${h.error}` : '';
-        process.stdout.write(`turn ${h.turn}: ${JSON.stringify(h.action)}${target}${url}${extra}\n`);
+      for (const w of result.warnings ?? []) {
+        process.stdout.write(`${c.yellow}WARNING${c.reset}: ${w}\n`);
       }
       const elapsedS = (result.elapsedMs / 1000).toFixed(1);
-      const perTurn = result.turns ? (result.elapsedMs / result.turns / 1000).toFixed(1) : '-';
-      process.stdout.write(`\nfinal url: ${result.finalUrl}\n`);
-      process.stdout.write(`turns: ${result.turns} | elapsed: ${elapsedS}s | avg/turn: ${perTurn}s\n`);
-      const t = result.tokens;
-      process.stdout.write(`tokens: ${t.totalTokens} (in=${t.input}, out=${t.output}) | cost: $${t.cost.toFixed(4)}\n`);
-      if (result.verifierTokens) {
-        const v = result.verifierTokens;
-        process.stdout.write(`verifier: ${v.totalTokens} (in=${v.input}, out=${v.output}) | cost: $${v.cost.toFixed(4)}\n`);
-      }
-      if (result.llmVerdict) {
-        const lv = result.llmVerdict;
-        const extra = lv.summary ?? lv.reason ?? '';
-        process.stdout.write(`driver verdict: ${lv.action}${extra ? ` — ${extra}` : ''}\n`);
-      }
-      const status = result.outcome === 'pass' ? 'PASS' : result.outcome === 'fail' ? 'FAIL' : 'ERROR';
-      process.stdout.write(`${status}: ${result.evidence}\n`);
-      for (const w of result.warnings ?? []) process.stdout.write(`WARNING: ${w}\n`);
+      const totalCost = (result.tokens?.cost ?? 0) + (result.verifierTokens?.cost ?? 0);
+      const tag =
+        result.outcome === 'pass'
+          ? `${c.green}✓ PASS${c.reset}`
+          : result.outcome === 'fail'
+            ? `${c.red}✗ FAIL${c.reset}`
+            : `${c.red}✗ ERROR${c.reset}`;
+      process.stdout.write(`\n${tag} — ${result.evidence}\n`);
+      process.stdout.write(`${c.dim}${result.turns} turns · ${elapsedS}s · $${totalCost.toFixed(4)}${c.reset}\n`);
     },
   };
 }

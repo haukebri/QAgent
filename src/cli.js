@@ -144,6 +144,8 @@ async function main() {
       : undefined;
 
   const reporters = selectReporters(reporterNames, { outputDir });
+  const ctx = { goal, modelId, verifierModelId };
+  for (const r of reporters) await r.onStart?.(ctx);
   const onTurn = reporters.some((r) => r.onTurn)
     ? (h) => { for (const r of reporters) r.onTurn?.(h); }
     : null;
@@ -168,7 +170,6 @@ async function main() {
       };
     }
 
-    const ctx = { goal, modelId, verifierModelId };
     for (const r of reporters) {
       await r.onEnd?.(result, ctx);
     }

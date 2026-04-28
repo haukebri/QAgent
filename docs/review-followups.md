@@ -12,11 +12,16 @@ Items surfaced by the README review (4 personas: AI user, architect, devops, PM)
 
 Source: AI-user reviewer (asked what `cost` units / scope mean).
 
-### 2. No wall-clock timeout
+### 2. No wall-clock timeout ✅ done
 
-`--max-turns` caps LLM turns; nothing caps wall time. A hung `navigate` or `fill` (page never settles) pins the process indefinitely.
+`--max-turns` capped LLM turns but nothing capped wall time. A hung `navigate` or `fill` (page never settles) could pin the process indefinitely.
 
-**Fix options:** add `--timeout <duration>` flag (e.g. `5m`, `90s`), kill the run + close the browser when hit, exit code 3. Or document `timeout(1)` as the official workaround and leave it at that.
+**Resolution:** added three timeout flags, all in seconds, with config + env layering:
+- `--test-timeout` (default 300) — wall-clock loop budget. On hit, the loop exits cleanly and the verifier still runs against the final state (the verifier can read the trajectory and explain *why* the run timed out — that's the intent). Outcome follows the verifier's call, not a forced exit code.
+- `--network-timeout` (default 30) — merges the previous `NAVIGATE_TIMEOUT_MS` (15s) + `OBSERVE_NETWORKIDLE_TIMEOUT_MS` (5s) into one knob covering `page.goto()` and post-action `networkidle` waits.
+- `--action-timeout` (default 2) — replaces hardcoded `ACTION_TIMEOUT_MS` (1.5s); per click/fill actionability check.
+
+Caveats: the wall-clock check fires at loop boundaries, so worst-case overshoot is one in-flight network call (~30s) or one LLM-decided `wait`. The verifier itself is not bounded by `--test-timeout`. Item #8 (navigate soft-fail) is unrelated and stays open.
 
 Source: DevOps reviewer (CI hang risk), AI-user reviewer (orchestrator stall recovery).
 
@@ -43,6 +48,16 @@ Today `src/verifier.js` is always an LLM judge. Some goals (e.g. "page contains 
 **Fix options:** post-MVP, allow a goal to declare a deterministic post-condition (e.g. via a future spec format), and skip the LLM judge when present. Only worth doing once the spec format is on the table.
 
 Source: Architect reviewer (questioning the README's "verifiers are pure code" claim, which was inaccurate — see #6).
+
+### 8. `navigate` timeout is a soft-fail in practice
+
+`src/tools.js:93-95` — `navigate()` throws when `page.goto()` exceeds `NAVIGATE_TIMEOUT_MS` (15s). That throw is caught one frame up in `src/executor.js:160-167`, recorded as the turn's `error`, and surfaced to the LLM via `lastError`. The driver then keeps going and typically retries or pivots.
+
+That makes the navigate timeout a **soft-fail with a warning**, not a hard stop, even though the comment block in `tools.js` describes it as "fail fast" and implies abort. Net effect: a navigate timeout costs one turn + one error message and the run continues. Users observing this expect the run to terminate; today it doesn't.
+
+**Fix options:** (a) leave the soft-fail behaviour but update the misleading comment; (b) make it a fatal error (push to `fatalError` instead of `lastError`) so the run aborts on a navigate timeout; (c) leave it soft-fail but bound the retry — N navigate timeouts in a row → fatal. The new wall-clock `--test-timeout` (#2) makes this less urgent, but the comment/behaviour mismatch is still a bug.
+
+Source: User observation while planning the timeout overhaul.
 
 ## Documentation (outside the README)
 

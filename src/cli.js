@@ -18,6 +18,9 @@ Options:
   --verifier-model <id>  Verifier model (defaults to --model)
   --api-key <key>        OpenRouter key (or env QAGENT_API_KEY / OPENROUTER_API_KEY)
   --max-turns <n>        Turn cap (default 50)
+  --test-timeout <s>     Wall-clock loop budget in seconds; verifier still runs after (default 300)
+  --network-timeout <s>  Per page.goto + post-action networkidle wait, in seconds (default 30)
+  --action-timeout <s>   Per click/fill in seconds; doubles as blocked-element detector (default 2)
   --reporter <list>      Comma-separated: list,json,ndjson,trace (default list)
   --output-dir <path>    Where trace files land (default results/, used with trace)
   --headed               Show browser window
@@ -26,6 +29,7 @@ Options:
 
 Environment:
   QAGENT_API_KEY, OPENROUTER_API_KEY, QAGENT_MODEL
+  QAGENT_TEST_TIMEOUT, QAGENT_NETWORK_TIMEOUT, QAGENT_ACTION_TIMEOUT  (seconds)
   BASIC_AUTH_USER, BASIC_AUTH_PASS  (per-page httpCredentials)
 
 Exit: 0 pass | 1 fail | 2 config error | 3 runtime error`;
@@ -35,9 +39,14 @@ const VALUE_FLAGS = {
   '--verifier-model': 'verifierModel',
   '--api-key': 'apiKey',
   '--max-turns': 'maxTurns',
+  '--test-timeout': 'testTimeout',
+  '--network-timeout': 'networkTimeout',
+  '--action-timeout': 'actionTimeout',
   '--reporter': 'reporter',
   '--output-dir': 'outputDir',
 };
+
+const TIMEOUT_FLAGS = new Set(['testTimeout', 'networkTimeout', 'actionTimeout']);
 
 function parseArgs(argv) {
   const flags = {};
@@ -56,6 +65,10 @@ function parseArgs(argv) {
       if (key === 'maxTurns') {
         const n = Number(v);
         if (!Number.isFinite(n) || n <= 0) throw new ConfigError(`--max-turns must be a positive number, got "${v}"`);
+        flags[key] = n;
+      } else if (TIMEOUT_FLAGS.has(key)) {
+        const n = Number(v);
+        if (!Number.isFinite(n) || n <= 0) throw new ConfigError(`${name} must be a positive number of seconds, got "${v}"`);
         flags[key] = n;
       } else if (key === 'reporter') {
         const names = v.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
@@ -124,6 +137,16 @@ async function main() {
   const verifierModelId =
     flags.verifierModel ?? project.verifierModel ?? user.verifierModel ?? modelId;
   const maxTurns = flags.maxTurns ?? project.maxTurns ?? user.maxTurns ?? 50;
+
+  const testTimeoutSec = resolveTimeout(
+    flags.testTimeout, process.env.QAGENT_TEST_TIMEOUT, project.testTimeout, user.testTimeout, 300, 'QAGENT_TEST_TIMEOUT', 'testTimeout',
+  );
+  const networkTimeoutSec = resolveTimeout(
+    flags.networkTimeout, process.env.QAGENT_NETWORK_TIMEOUT, project.networkTimeout, user.networkTimeout, 30, 'QAGENT_NETWORK_TIMEOUT', 'networkTimeout',
+  );
+  const actionTimeoutSec = resolveTimeout(
+    flags.actionTimeout, process.env.QAGENT_ACTION_TIMEOUT, project.actionTimeout, user.actionTimeout, 2, 'QAGENT_ACTION_TIMEOUT', 'actionTimeout',
+  );
   const reporterNames = flags.reporter ?? project.reporter ?? user.reporter ?? ['list'];
   for (const n of reporterNames) {
     if (!KNOWN_REPORTERS.includes(n)) {
@@ -154,7 +177,10 @@ async function main() {
   try {
     let result;
     try {
-      result = await runTodo(page, goal, model, apiKey, maxTurns, verifierModel, onTurn);
+      result = await runTodo(
+        page, goal, model, apiKey, maxTurns, verifierModel, onTurn,
+        testTimeoutSec * 1000, networkTimeoutSec * 1000, actionTimeoutSec * 1000,
+      );
     } catch (err) {
       result = {
         outcome: 'error',
@@ -180,6 +206,26 @@ async function main() {
   } finally {
     await browser.close();
   }
+}
+
+function resolveTimeout(flagVal, envVal, projectVal, userVal, defaultSec, envName, configKey) {
+  if (flagVal !== undefined) return flagVal;
+  if (envVal !== undefined && envVal !== '') {
+    const n = Number(envVal);
+    if (!Number.isFinite(n) || n <= 0) {
+      throw new ConfigError(`${envName} must be a positive number of seconds, got "${envVal}"`);
+    }
+    return n;
+  }
+  for (const [scope, val] of [['project', projectVal], ['user', userVal]]) {
+    if (val !== undefined) {
+      if (typeof val !== 'number' || !Number.isFinite(val) || val <= 0) {
+        throw new ConfigError(`${scope} config "${configKey}" must be a positive number of seconds, got ${JSON.stringify(val)}`);
+      }
+      return val;
+    }
+  }
+  return defaultSec;
 }
 
 try {

@@ -138,10 +138,11 @@ Stderr stays clean — only the trace reporter writes its path confirmation ther
 ### CI tips
 
 - **Pass the API key via env var** (`QAGENT_API_KEY` or `OPENROUTER_API_KEY`). Avoid `--api-key sk-or-...` on argv (visible in `ps` and most CI job logs) and avoid `qagent config set apiKey ...` in CI scripts (writes to `~/.config/qagent/config.json` on the runner — leaks across cached or shared workers).
-- **Wrap with a wall-clock timeout.** `--max-turns` caps LLM turns, not wall time; a hung navigation can pin the process indefinitely. Use `timeout(1)`:
+- **Tune the wall-clock budget.** `--test-timeout` caps the loop in seconds (default 300 = 5 min); the verifier still runs against whatever state the loop left behind, so the run terminates with a real verdict instead of hanging. Wrap with `timeout(1)` only as a belt-and-braces backstop:
 
   ```bash
-  timeout 5m qagent "<goal>" --reporter=ndjson
+  qagent "<goal>" --test-timeout=600 --reporter=ndjson
+  timeout 11m qagent "<goal>" --test-timeout=600 --reporter=ndjson   # hard kill if even the verifier hangs
   ```
 
 - **Browsers don't auto-install.** `npx playwright install chromium` once per runner image (not needed if a system Chrome is present and reachable).
@@ -165,6 +166,9 @@ Run options:
   --verifier-model <id>   Verifier model (defaults to --model)
   --api-key <key>         OpenRouter key
   --max-turns <n>         Turn cap (default 50)
+  --test-timeout <s>      Wall-clock loop budget in seconds; verifier still runs after (default 300)
+  --network-timeout <s>   Per page.goto + post-action networkidle wait, in seconds (default 30)
+  --action-timeout <s>    Per click/fill in seconds; doubles as blocked-element detector (default 2)
   --reporter <list>       Comma-separated: list,json,ndjson,trace (default list)
   --output-dir <path>     Where trace files land (default results/)
   --headed                Show the browser window
@@ -176,6 +180,7 @@ Config subcommands:
 
 Environment:
   QAGENT_API_KEY, OPENROUTER_API_KEY, QAGENT_MODEL
+  QAGENT_TEST_TIMEOUT, QAGENT_NETWORK_TIMEOUT, QAGENT_ACTION_TIMEOUT  (seconds)
   BASIC_AUTH_USER, BASIC_AUTH_PASS    (per-page httpCredentials)
 
 Resolution: flag > env > project > user > built-in default

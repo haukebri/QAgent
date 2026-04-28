@@ -10,7 +10,7 @@ if (!url) {
 const { browser, page } = await launchPage();
 try {
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
-  console.log(await observe(page));
+  console.log(await observe(page, 5000));
 } catch (err) {
   console.error(err.message);
   process.exitCode = 1;

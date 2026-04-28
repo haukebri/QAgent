@@ -1,8 +1,8 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { Agent } from '@mariozechner/pi-agent-core';
 import { observe, click, fill, navigate } from './tools.js';
 import { verify } from './verifier.js';
-import { sliceSections, compressAgainstBaseline } from './snapshot-compress.js';
+import { compressAgainstBaseline } from './snapshot-compress.js';
 
 const SNAPSHOT_BEGIN = '<<SNAPSHOT_BEGIN>>';
 const SNAPSHOT_END = '<<SNAPSHOT_END>>';
@@ -37,7 +37,18 @@ const SYSTEM_PROMPT =
   'In the latest snapshot, a section body may read "# unchanged since turn N" — that section is byte-identical to the baseline anchor\'s, ' +
   'so its refs are the SAME numbers as in the anchor. Look up element details there.';
 
-export async function runTodo(page, goal, model, apiKey, maxTurns = 20, verifierModel = null, onTurn = null) {
+export async function runTodo(
+  page,
+  goal,
+  model,
+  apiKey,
+  maxTurns = 20,
+  verifierModel = null,
+  onTurn = null,
+  testTimeoutMs = 300_000,
+  networkTimeoutMs = 30_000,
+  actionTimeoutMs = 2_000,
+) {
   const t0 = Date.now();
 
   const scrubState = { baselineTurn: 0 };
@@ -50,12 +61,12 @@ export async function runTodo(page, goal, model, apiKey, maxTurns = 20, verifier
 
   const history = [];
   const warnings = [];
-  const snapshotStats = [];
   const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 };
   let turns = 0;
   let lastError = null;
   let verdict = null;
   let fatalError = null;
+  let wallClockExpired = false;
   let finalSnapshot = '';
 
   let prevSnapshotLen = null;
@@ -63,27 +74,22 @@ export async function runTodo(page, goal, model, apiKey, maxTurns = 20, verifier
   let prevCompressionRatio = null;
 
   while (turns < maxTurns) {
+    if (Date.now() - t0 > testTimeoutMs) {
+      wallClockExpired = true;
+      break;
+    }
     turns++;
     try {
-      const snapshot = await observe(page);
+      const snapshot = await observe(page, networkTimeoutMs);
       let snapshotDelta = null;
       if (prevSnapshotLen !== null && history.length > 0) {
         const last = history[history.length - 1];
         if (last.action?.action !== 'wait') {
           snapshotDelta = snapshot.length - prevSnapshotLen;
-          last.snapshotDelta = snapshotDelta;
         }
       }
       prevSnapshotLen = snapshot.length;
       finalSnapshot = snapshot;
-      const sections = sliceSections(snapshot);
-      const statEntry = {
-        turn: turns,
-        bytes: snapshot.length,
-        sha1: createHash('sha1').update(snapshot).digest('hex'),
-        sections: sections.map(s => ({ role: s.role, ref: s.ref, bytes: s.text.length, sha1: s.sha1 })),
-      };
-      snapshotStats.push(statEntry);
       const url = page.url();
 
       const shouldReset = !baseline
@@ -105,7 +111,6 @@ export async function runTodo(page, goal, model, apiKey, maxTurns = 20, verifier
         messageSnapshot = text;
         isBaselineTurn = false;
         prevCompressionRatio = stats.origBytes > 0 ? stats.compressedBytes / stats.origBytes : 1;
-        statEntry.compression = stats;
       }
 
       const { action, usage } = await askNextAction({ agent, goal, url, messageSnapshot, isBaselineTurn, baselineTurn: baseline.turn, lastError, snapshotDelta });
@@ -125,6 +130,7 @@ export async function runTodo(page, goal, model, apiKey, maxTurns = 20, verifier
           reason: action.reason ?? null,
         };
         const verdictEntry = { turn: turns, atMs: Date.now() - t0, action, url: page.url() };
+        if (usage) verdictEntry.tokens = stepTokens(usage);
         history.push(verdictEntry);
         onTurn?.(verdictEntry);
         break;
@@ -141,15 +147,16 @@ export async function runTodo(page, goal, model, apiKey, maxTurns = 20, verifier
       }
 
       const entry = { turn: turns, atMs: Date.now() - t0, action };
+      if (usage) entry.tokens = stepTokens(usage);
       if (action.action === 'click' || action.action === 'fill') {
         const target = labelForRef(snapshot, action.ref);
         if (target) entry.target = target;
       }
       const tAction = Date.now();
       try {
-        if (action.action === 'navigate') await navigate(page, action.url);
-        else if (action.action === 'click') await click(page, action.ref);
-        else if (action.action === 'fill') await fill(page, action.ref, action.value);
+        if (action.action === 'navigate') await navigate(page, action.url, networkTimeoutMs);
+        else if (action.action === 'click') await click(page, action.ref, actionTimeoutMs);
+        else if (action.action === 'fill') await fill(page, action.ref, action.value, actionTimeoutMs);
         else if (action.action === 'wait') await page.waitForTimeout(action.ms ?? 1000);
         else throw new Error(`unknown action: ${action.action}`);
         entry.ms = Date.now() - tAction;
@@ -175,18 +182,32 @@ export async function runTodo(page, goal, model, apiKey, maxTurns = 20, verifier
   const elapsedMs = Date.now() - t0;
 
   if (fatalError !== null) {
+    const failureScreenshot = await captureScreenshot(page);
     return {
       outcome: 'error',
       evidence: fatalError,
       llmVerdict: verdict,
       turns, elapsedMs,
       tokens, verifierTokens: null,
-      finalUrl, finalSnapshot,
-      history, warnings, snapshotStats,
+      finalUrl, finalSnapshot, failureScreenshot,
+      history, warnings,
     };
   }
 
-  const verifierVerdict = verdict ?? { action: 'stuck', summary: null, reason: null };
+  if (wallClockExpired) {
+    const seconds = Math.round(testTimeoutMs / 1000);
+    warnings.push(`wall-clock test-timeout (${seconds}s) reached at turn ${turns}`);
+  }
+
+  const verifierVerdict = verdict ?? (
+    wallClockExpired
+      ? {
+          action: 'fail',
+          summary: null,
+          reason: `wall-clock timeout: ${Math.round(elapsedMs / 1000)}s elapsed across ${turns} turns without a terminal verdict`,
+        }
+      : { action: 'stuck', summary: null, reason: null }
+  );
   const judgeModel = verifierModel ?? model;
 
   let outcome;
@@ -202,15 +223,32 @@ export async function runTodo(page, goal, model, apiKey, maxTurns = 20, verifier
     ({ outcome, evidence } = fallbackFromVerdict(verifierVerdict));
   }
 
+  const failureScreenshot = outcome !== 'pass' ? await captureScreenshot(page) : null;
+
   return {
     outcome,
     evidence,
     llmVerdict: verdict,
     turns, elapsedMs,
     tokens, verifierTokens,
-    finalUrl, finalSnapshot,
-    history, warnings, snapshotStats,
+    finalUrl, finalSnapshot, failureScreenshot,
+    history, warnings,
   };
+}
+
+function stepTokens(usage) {
+  return {
+    input: usage.input ?? 0,
+    output: usage.output ?? 0,
+    cacheRead: usage.cacheRead ?? 0,
+    cacheWrite: usage.cacheWrite ?? 0,
+    totalTokens: usage.totalTokens ?? 0,
+    cost: Math.round((usage.cost?.total ?? 0) * 1000) / 1000,
+  };
+}
+
+async function captureScreenshot(page) {
+  return page.screenshot({ fullPage: true }).catch(() => null);
 }
 
 function fallbackFromVerdict(v) {

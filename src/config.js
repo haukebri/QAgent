@@ -12,6 +12,9 @@ const KNOWN_KEYS = {
   verifierModel: { type: 'string' },
   apiKey: { type: 'string' },
   maxTurns: { type: 'number' },
+  testTimeout: { type: 'seconds' },
+  networkTimeout: { type: 'seconds' },
+  actionTimeout: { type: 'seconds' },
   reporter: { type: 'array' },
   outputDir: { type: 'string' },
   headed: { type: 'boolean' },
@@ -61,6 +64,13 @@ function coerceValue(key, value) {
     const n = Number(value);
     if (!Number.isInteger(n) || n <= 0) {
       throw new ConfigError(`${key} must be a positive integer, got "${value}"`);
+    }
+    return n;
+  }
+  if (type === 'seconds') {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) {
+      throw new ConfigError(`${key} must be a positive number of seconds, got "${value}"`);
     }
     return n;
   }

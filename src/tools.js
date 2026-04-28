@@ -1,18 +1,22 @@
-// Short actionability timeout — Playwright's own check (visible, stable,
-// receives events, enabled) doubles as our blocked-click detector. 1.5s is
-// enough to let transient states (animations, fade-outs) settle without
-// burning turns when an overlay genuinely won't move.
-const ACTION_TIMEOUT_MS = 1500;
-const NAVIGATE_TIMEOUT_MS = 15000;
-const OBSERVE_NETWORKIDLE_TIMEOUT_MS = 5000;
+// All timeouts here are caller-supplied (ms). The CLI parses --action-timeout
+// and --network-timeout (in seconds) and threads them through executor.js.
+//
+// Action timeout (~2s) doubles as our blocked-click detector — Playwright's
+// own actionability check (visible, stable, receives events, enabled) is short
+// enough that an overlay-blocked element fails fast instead of burning turns,
+// long enough to let transient states (animations, fade-outs) settle.
+//
+// Network timeout (~30s) covers both page.goto() and post-action networkidle
+// waits. Both are caught (goto by executor.js, networkidle inline below) so
+// they're soft-fail in practice — see review-followups.md item #8.
 
 // waitForLoadState('networkidle') is deliberate — it lets SPA route transitions
 // settle before we snapshot, so the LLM sees the post-nav page, not the pre-nav one.
 // Do NOT downgrade to 'domcontentloaded'. The bounded timeout + try/catch prevent
 // pages with constant background traffic (analytics, polling) from hanging forever.
-export async function observe(page) {
+export async function observe(page, networkTimeoutMs) {
   try {
-    await page.waitForLoadState('networkidle', { timeout: OBSERVE_NETWORKIDLE_TIMEOUT_MS });
+    await page.waitForLoadState('networkidle', { timeout: networkTimeoutMs });
   } catch {
     // networkidle never settled (ads, analytics, long-poll) — snapshot anyway
   }
@@ -76,20 +80,22 @@ async function actOrDescribe(locator, verb, action) {
   }
 }
 
-export async function click(page, ref) {
+export async function click(page, ref, actionTimeoutMs) {
   const locator = page.locator(`aria-ref=${ref}`);
-  await actOrDescribe(locator, 'click', () => locator.click({ timeout: ACTION_TIMEOUT_MS }));
+  await actOrDescribe(locator, 'click', () => locator.click({ timeout: actionTimeoutMs }));
 }
 
-export async function fill(page, ref, value) {
+export async function fill(page, ref, value, actionTimeoutMs) {
   const locator = page.locator(`aria-ref=${ref}`);
-  await actOrDescribe(locator, 'fill', () => locator.fill(value, { timeout: ACTION_TIMEOUT_MS }));
+  await actOrDescribe(locator, 'fill', () => locator.fill(value, { timeout: actionTimeoutMs }));
 }
 
 // waitUntil: 'networkidle' is deliberate — it catches SPA route transitions where
 // the URL changes but no full page load fires. Do NOT downgrade to 'domcontentloaded'.
 // The explicit timeout bounds the wait so pages with constant background traffic
-// (google.com, ads, analytics) fail fast instead of hanging; executor catches that.
-export async function navigate(page, url) {
-  await page.goto(url, { waitUntil: 'networkidle', timeout: NAVIGATE_TIMEOUT_MS });
+// (google.com, ads, analytics) don't hang. NB: this throws on timeout, but
+// executor.js catches it and surfaces the message to the LLM, so it's a
+// soft-fail in practice (review-followups.md #8).
+export async function navigate(page, url, networkTimeoutMs) {
+  await page.goto(url, { waitUntil: 'networkidle', timeout: networkTimeoutMs });
 }

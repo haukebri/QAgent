@@ -1,6 +1,28 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
+const roundCost = (n) => Math.round((n ?? 0) * 1000) / 1000;
+const toSec = (ms) => Math.round((ms ?? 0) / 1000);
+
+function transformTokens(t) {
+  if (!t) return t;
+  return { ...t, cost: roundCost(t.cost) };
+}
+
+function transformStep(s) {
+  const out = { ...s };
+  if ('atMs' in out) {
+    out.atSec = toSec(out.atMs);
+    delete out.atMs;
+  }
+  if ('ms' in out) {
+    out.durationSec = toSec(out.ms);
+    delete out.ms;
+  }
+  if (out.tokens) out.tokens = transformTokens(out.tokens);
+  return out;
+}
+
 export function buildPayload(goal, modelId, verifierModelId, result) {
   return {
     timestamp: new Date().toISOString(),
@@ -8,18 +30,17 @@ export function buildPayload(goal, modelId, verifierModelId, result) {
     model: modelId,
     verifierModel: verifierModelId,
     outcome: result.outcome,
-    evidence: result.evidence,
-    llmVerdict: result.llmVerdict,
+    reasoning: result.llmVerdict?.summary ?? null,
+    llmVerdict: { reason: result.llmVerdict?.reason ?? null },
     finalUrl: result.finalUrl,
     stats: {
       turns: result.turns,
-      elapsedMs: result.elapsedMs,
-      tokens: result.tokens,
-      verifierTokens: result.verifierTokens,
+      elapsedSec: toSec(result.elapsedMs),
+      tokens: transformTokens(result.tokens),
+      verifierTokens: transformTokens(result.verifierTokens),
     },
-    steps: result.history,
+    steps: (result.history ?? []).map(transformStep),
     warnings: result.warnings,
-    snapshotStats: result.snapshotStats,
   };
 }
 
@@ -27,7 +48,16 @@ export async function record(goal, modelId, verifierModelId, result, outDir = 'r
   const payload = buildPayload(goal, modelId, verifierModelId, result);
   const dir = resolve(outDir);
   await mkdir(dir, { recursive: true });
-  const filepath = resolve(dir, `${payload.timestamp.replace(/[:.]/g, '-')}.json`);
+  const stem = payload.timestamp.replace(/[:.]/g, '-');
+  const filepath = resolve(dir, `${stem}.json`);
   await writeFile(filepath, JSON.stringify(payload, null, 2), 'utf8');
+  if (result.outcome !== 'pass') {
+    if (result.finalSnapshot) {
+      await writeFile(resolve(dir, `${stem}.snapshot.yaml`), result.finalSnapshot, 'utf8');
+    }
+    if (result.failureScreenshot) {
+      await writeFile(resolve(dir, `${stem}.screenshot.png`), result.failureScreenshot);
+    }
+  }
   return filepath;
 }

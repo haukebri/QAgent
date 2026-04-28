@@ -7,6 +7,9 @@ const ENV_LOOKUP = {
   verifierModel: [],
   apiKey: ['QAGENT_API_KEY', 'OPENROUTER_API_KEY'],
   maxTurns: [],
+  testTimeout: ['QAGENT_TEST_TIMEOUT'],
+  networkTimeout: ['QAGENT_NETWORK_TIMEOUT'],
+  actionTimeout: ['QAGENT_ACTION_TIMEOUT'],
   reporter: [],
   outputDir: [],
   headed: [],
@@ -14,24 +17,33 @@ const ENV_LOOKUP = {
 
 const DEFAULTS = {
   maxTurns: 50,
+  testTimeout: 300,
+  networkTimeout: 30,
+  actionTimeout: 2,
   reporter: ['list'],
   outputDir: 'results',
   headed: false,
 };
 
 const KEY_DOCS = {
-  model:         'OpenRouter LLM model id (e.g. anthropic/claude-sonnet-4-5)',
-  verifierModel: 'Verifier model id; defaults to model when unset',
-  apiKey:        'OpenRouter API key (sk-or-...)',
-  maxTurns:      'Positive integer turn cap',
-  reporter:      `Comma-separated; values: ${KNOWN_REPORTERS.join(', ')}`,
-  outputDir:     'Path where the trace reporter writes files',
-  headed:        'Show browser window; accepts true|false or 1|0',
+  model:          'OpenRouter LLM model id (e.g. anthropic/claude-sonnet-4-5)',
+  verifierModel:  'Verifier model id; defaults to model when unset',
+  apiKey:         'OpenRouter API key (sk-or-...)',
+  maxTurns:       'Positive integer turn cap',
+  testTimeout:    'Wall-clock loop budget in seconds; verifier still runs after',
+  networkTimeout: 'Per page.goto + post-action networkidle wait, in seconds',
+  actionTimeout:  'Per click/fill in seconds; doubles as blocked-element detector',
+  reporter:       `Comma-separated; values: ${KNOWN_REPORTERS.join(', ')}`,
+  outputDir:      'Path where the trace reporter writes files',
+  headed:         'Show browser window; accepts true|false or 1|0',
 };
 
 const ENV_HINTS = {
   model: 'env QAGENT_MODEL',
   apiKey: 'env QAGENT_API_KEY / OPENROUTER_API_KEY',
+  testTimeout: 'env QAGENT_TEST_TIMEOUT',
+  networkTimeout: 'env QAGENT_NETWORK_TIMEOUT',
+  actionTimeout: 'env QAGENT_ACTION_TIMEOUT',
 };
 
 function formatDefault(v) {
@@ -43,19 +55,28 @@ function formatDefault(v) {
 function buildHelp() {
   const rows = KEY_LIST.map((k) => {
     const def = formatDefault(DEFAULTS[k]);
-    const envHint = ENV_HINTS[k] ? ` [${ENV_HINTS[k]}]` : '';
     const defHint = def ? ` (default: ${def})` : '';
-    return { key: k, type: KEY_TYPES[k], doc: KEY_DOCS[k] + defHint + envHint };
+    return { key: k, type: KEY_TYPES[k], doc: KEY_DOCS[k] + defHint };
   });
   const keyW = Math.max(...rows.map((r) => r.key.length));
   const typeW = Math.max(...rows.map((r) => r.type.length));
   const lines = rows.map((r) => `  ${r.key.padEnd(keyW)}  ${r.type.padEnd(typeW)}  ${r.doc}`);
+
+  const envRows = KEY_LIST
+    .filter((k) => ENV_HINTS[k])
+    .map((k) => ({ key: k, env: ENV_HINTS[k].replace(/^env /, '') }));
+  const envKeyW = envRows.length ? Math.max(...envRows.map((r) => r.key.length)) : 0;
+  const envLines = envRows.map((r) => `  ${r.key.padEnd(envKeyW)}  ${r.env}`);
+
   return `Usage:
   qagent config set [--project] <key> <value>   Write a config value
   qagent config list                            Print effective config + sources
 
 Keys:
 ${lines.join('\n')}
+
+Environment overrides:
+${envLines.join('\n')}
 
 Resolution: flag > env > project > user > default
 Default scope for set/list is the user config (~/.config/qagent/config.json).

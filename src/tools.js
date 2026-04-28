@@ -7,8 +7,10 @@
 // long enough to let transient states (animations, fade-outs) settle.
 //
 // Network timeout (~30s) covers both page.goto() and post-action networkidle
-// waits. Both are caught (goto by executor.js, networkidle inline below) so
-// they're soft-fail in practice — see review-followups.md item #8.
+// waits. The post-action networkidle wait is caught inline in observe() below
+// (soft-fail — pages with constant background traffic still get snapshotted).
+// page.goto() throws are *fatal*: executor.js escalates to fatalError, ending
+// the run with outcome 'error' and exit code 3 (review-followups.md #8).
 
 // waitForLoadState('networkidle') is deliberate — it lets SPA route transitions
 // settle before we snapshot, so the LLM sees the post-nav page, not the pre-nav one.
@@ -93,9 +95,9 @@ export async function fill(page, ref, value, actionTimeoutMs) {
 // waitUntil: 'networkidle' is deliberate — it catches SPA route transitions where
 // the URL changes but no full page load fires. Do NOT downgrade to 'domcontentloaded'.
 // The explicit timeout bounds the wait so pages with constant background traffic
-// (google.com, ads, analytics) don't hang. NB: this throws on timeout, but
-// executor.js catches it and surfaces the message to the LLM, so it's a
-// soft-fail in practice (review-followups.md #8).
+// (google.com, ads, analytics) don't hang. Any throw here (timeout, DNS, SSL,
+// bad URL) is fatal — executor.js routes it to fatalError, ending the run with
+// outcome 'error' and exit code 3 (review-followups.md #8).
 export async function navigate(page, url, networkTimeoutMs) {
   await page.goto(url, { waitUntil: 'networkidle', timeout: networkTimeoutMs });
 }

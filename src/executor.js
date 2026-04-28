@@ -165,12 +165,14 @@ export async function runTodo(
         onTurn?.(entry);
         lastError = null;
       } catch (err) {
-        lastError = err.message.split('\n')[0];
+        const msg = err.message.split('\n')[0];
         entry.ms = Date.now() - tAction;
         entry.url = page.url();
-        entry.error = lastError;
+        entry.error = msg;
         history.push(entry);
         onTurn?.(entry);
+        if (action.action === 'navigate') throw err;
+        lastError = msg;
       }
     } catch (err) {
       fatalError = err.message.split('\n')[0];

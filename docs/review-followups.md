@@ -50,13 +50,13 @@ Today `src/verifier.js` is always an LLM judge. Some goals (e.g. "page contains 
 
 Source: Architect reviewer (questioning the README's "verifiers are pure code" claim, which was inaccurate — see #6).
 
-### 8. `navigate` timeout is a soft-fail in practice
+### 8. `navigate` timeout is a soft-fail in practice ✅ done
 
-`src/tools.js:93-95` — `navigate()` throws when `page.goto()` exceeds `NAVIGATE_TIMEOUT_MS` (15s). That throw is caught one frame up in `src/executor.js:160-167`, recorded as the turn's `error`, and surfaced to the LLM via `lastError`. The driver then keeps going and typically retries or pivots.
+`src/tools.js:93-95` — `navigate()` throws when `page.goto()` exceeds `NAVIGATE_TIMEOUT_MS` (15s). That throw was caught one frame up in `src/executor.js:160-167`, recorded as the turn's `error`, and surfaced to the LLM via `lastError`. The driver then kept going and typically retried or pivoted.
 
-That makes the navigate timeout a **soft-fail with a warning**, not a hard stop, even though the comment block in `tools.js` describes it as "fail fast" and implies abort. Net effect: a navigate timeout costs one turn + one error message and the run continues. Users observing this expect the run to terminate; today it doesn't.
+That made the navigate timeout a **soft-fail with a warning**, not a hard stop, even though the comment block in `tools.js` described it as "fail fast" and implied abort. Net effect: a navigate timeout cost one turn + one error message and the run continued. Users observing this expected the run to terminate; it didn't.
 
-**Fix options:** (a) leave the soft-fail behaviour but update the misleading comment; (b) make it a fatal error (push to `fatalError` instead of `lastError`) so the run aborts on a navigate timeout; (c) leave it soft-fail but bound the retry — N navigate timeouts in a row → fatal. The new wall-clock `--test-timeout` (#2) makes this less urgent, but the comment/behaviour mismatch is still a bug.
+**Resolution:** chose option (b). The per-turn catch in `src/executor.js` now re-throws on `action.action === 'navigate'` so any error from `navigate()` (timeout, DNS, SSL, bad URL) escalates to `fatalError`, aborting the run with `outcome: 'error'` and exit code 3. The failing navigate is still recorded in the trace `history` before the throw escapes, so consumers see exactly which URL failed and why. Other tool errors (`click`, `fill`, `wait`) keep their soft-fail behaviour so the LLM can still pivot. Comments in `src/tools.js` updated to describe the new fatal behaviour. Per-call LLM/verifier timing audit (a related observation surfaced during this investigation) deferred.
 
 Source: User observation while planning the timeout overhaul.
 

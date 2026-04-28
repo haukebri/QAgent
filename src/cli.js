@@ -19,7 +19,7 @@ Options:
   --api-key <key>        OpenRouter key (or env QAGENT_API_KEY / OPENROUTER_API_KEY)
   --max-turns <n>        Turn cap (default 50)
   --test-timeout <s>     Wall-clock loop budget in seconds; verifier still runs after (default 300)
-  --network-timeout <s>  Per page.goto + post-action networkidle wait, in seconds (default 30)
+  --network-timeout <s>  Per page.goto, in seconds (default 30)
   --action-timeout <s>   Per click/fill in seconds; doubles as blocked-element detector (default 2)
   --reporter <list>      Comma-separated: list,json,ndjson,trace (default list)
   --output-dir <path>    Where trace files land (default results/, used with trace)

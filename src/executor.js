@@ -80,7 +80,7 @@ export async function runTodo(
     }
     turns++;
     try {
-      const snapshot = await observe(page, networkTimeoutMs);
+      const snapshot = await observe(page);
       let snapshotDelta = null;
       if (prevSnapshotLen !== null && history.length > 0) {
         const last = history[history.length - 1];

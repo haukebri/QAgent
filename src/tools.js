@@ -6,22 +6,20 @@
 // enough that an overlay-blocked element fails fast instead of burning turns,
 // long enough to let transient states (animations, fade-outs) settle.
 //
-// Network timeout (~30s) covers both page.goto() and post-action networkidle
-// waits. The post-action networkidle wait is caught inline in observe() below
-// (soft-fail — pages with constant background traffic still get snapshotted).
-// page.goto() throws are *fatal*: executor.js escalates to fatalError, ending
-// the run with outcome 'error' and exit code 3 (review-followups.md #8).
+// Network timeout (~30s) bounds page.goto(). We use waitUntil: 'load' (not
+// 'networkidle' — Playwright discourages it; chatty real-world pages with
+// analytics/polling rarely settle). page.goto() throws are *fatal*:
+// executor.js escalates to fatalError, ending the run with outcome 'error'
+// and exit code 3 (review-followups.md #8).
 
-// waitForLoadState('networkidle') is deliberate — it lets SPA route transitions
-// settle before we snapshot, so the LLM sees the post-nav page, not the pre-nav one.
-// Do NOT downgrade to 'domcontentloaded'. The bounded timeout + try/catch prevent
-// pages with constant background traffic (analytics, polling) from hanging forever.
-export async function observe(page, networkTimeoutMs) {
+// Brief soft-fail networkidle wait lets SPA route transitions settle before we
+// snapshot. 2s cap is intentional: on chatty pages networkidle never fires; on
+// quiet pages it lands in <1s. Beyond that we snapshot anyway and let the LLM
+// iterate. Internal-only — not user-tunable.
+export async function observe(page) {
   try {
-    await page.waitForLoadState('networkidle', { timeout: networkTimeoutMs });
-  } catch {
-    // networkidle never settled (ads, analytics, long-poll) — snapshot anyway
-  }
+    await page.waitForLoadState('networkidle', { timeout: 2000 });
+  } catch {}
   return await page.locator('body').ariaSnapshot({ mode: 'ai' });
 }
 
@@ -92,12 +90,12 @@ export async function fill(page, ref, value, actionTimeoutMs) {
   await actOrDescribe(locator, 'fill', () => locator.fill(value, { timeout: actionTimeoutMs }));
 }
 
-// waitUntil: 'networkidle' is deliberate — it catches SPA route transitions where
-// the URL changes but no full page load fires. Do NOT downgrade to 'domcontentloaded'.
-// The explicit timeout bounds the wait so pages with constant background traffic
-// (google.com, ads, analytics) don't hang. Any throw here (timeout, DNS, SSL,
-// bad URL) is fatal — executor.js routes it to fatalError, ending the run with
-// outcome 'error' and exit code 3 (review-followups.md #8).
+// waitUntil: 'load' (not 'networkidle' — Playwright discourages it; chatty
+// pages with analytics/polling rarely settle). 'load' fires when the doc and
+// its sub-resources are loaded; observe() then does a brief networkidle wait
+// before snapshotting, which absorbs SPA hydration. Any throw here (timeout,
+// DNS, SSL, bad URL) is fatal — executor.js routes it to fatalError, ending
+// the run with outcome 'error' and exit code 3 (review-followups.md #8).
 export async function navigate(page, url, networkTimeoutMs) {
-  await page.goto(url, { waitUntil: 'networkidle', timeout: networkTimeoutMs });
+  await page.goto(url, { waitUntil: 'load', timeout: networkTimeoutMs });
 }

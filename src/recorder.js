@@ -2,7 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 const roundCost = (n) => Math.round((n ?? 0) * 1000) / 1000;
-const toSec = (ms) => Math.round((ms ?? 0) / 1000);
+const toSec = (ms) => Math.round((ms ?? 0) / 100) / 10;
 
 function transformTokens(t) {
   if (!t) return t;

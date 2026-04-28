@@ -17,6 +17,7 @@ Source: AI-user reviewer (asked what `cost` units / scope mean).
 `--max-turns` capped LLM turns but nothing capped wall time. A hung `navigate` or `fill` (page never settles) could pin the process indefinitely.
 
 **Resolution:** added three timeout flags, all in seconds, with config + env layering:
+
 - `--test-timeout` (default 300) — wall-clock loop budget. On hit, the loop exits cleanly and the verifier still runs against the final state (the verifier can read the trajectory and explain *why* the run timed out — that's the intent). Outcome follows the verifier's call, not a forced exit code.
 - `--network-timeout` (default 30) — merges the previous `NAVIGATE_TIMEOUT_MS` (15s) + `OBSERVE_NETWORKIDLE_TIMEOUT_MS` (5s) into one knob covering `page.goto()` and post-action `networkidle` waits.
 - `--action-timeout` (default 2) — replaces hardcoded `ACTION_TIMEOUT_MS` (1.5s); per click/fill actionability check.
@@ -25,7 +26,7 @@ Caveats: the wall-clock check fires at loop boundaries, so worst-case overshoot 
 
 Source: DevOps reviewer (CI hang risk), AI-user reviewer (orchestrator stall recovery).
 
-### 3. No cost ceiling
+### 3. No cost ceiling - ❌ REJECTED - max turns and time limit are the soft catches for costs. no need to go beyond that. We are in the millicent area, not in the hundreds of euro range
 
 A 2-turn run is `$0.0001`; a 20-turn run on a complex SPA can be orders of magnitude more. There's no `--max-cost` and no documented mechanism to abort when cost exceeds a threshold.
 
@@ -33,7 +34,7 @@ A 2-turn run is `$0.0001`; a 20-turn run on a complex SPA can be orders of magni
 
 Source: Architect reviewer (worst-case bounds), PM reviewer (budget predictability).
 
-### 4. Trace filename collision risk
+### 4. Trace filename collision risks
 
 `record()` uses `results/<iso>.json` with `Date.now()` resolution. Two parallel `qagent` invocations on the same machine starting in the same millisecond would collide. Unlikely in practice but theoretically possible.
 

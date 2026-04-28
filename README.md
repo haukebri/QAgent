@@ -49,7 +49,7 @@ Output:
 | `list` (default) | Live human-readable progress with ✓/✗, color, per-turn timing |
 | `ndjson` | One JSON event per turn streamed to stdout, ending with a `done` envelope |
 | `json` | Single JSON object dumped at the end |
-| `trace` | Writes `results/<iso>.json` (path overridable with `--output-dir`); confirmation goes to **stderr** so machine-readable reporters keep stdout clean |
+| `trace` | Writes `results/<YYYY-MM-DDTHH-MM>H<HASH>.json` (path overridable with `--output-dir`); confirmation goes to **stderr** so machine-readable reporters keep stdout clean |
 
 Compose with a comma: `--reporter=list,trace`. Default is `list`.
 

@@ -34,11 +34,11 @@ A 2-turn run is `$0.0001`; a 20-turn run on a complex SPA can be orders of magni
 
 Source: Architect reviewer (worst-case bounds), PM reviewer (budget predictability).
 
-### 4. Trace filename collision risks
+### 4. Trace filename collision risks ✅ done
 
-`record()` uses `results/<iso>.json` with `Date.now()` resolution. Two parallel `qagent` invocations on the same machine starting in the same millisecond would collide. Unlikely in practice but theoretically possible.
+`record()` previously used `results/<iso>.json` with `Date.now()` resolution. Two parallel `qagent` invocations on the same machine starting in the same millisecond would collide.
 
-**Fix options:** append a short random suffix (e.g. 4-char nanoid) to the filename; or accept the risk and document.
+**Resolution:** filename stem is now `<YYYY-MM-DDTHH-MM>H<HASH>` where `HASH` is 4 uppercase hex chars from `crypto.randomBytes(2)`. Seconds and milliseconds dropped (the random suffix is the disambiguator). Same stem is reused for `.json`, `.snapshot.yaml`, and `.screenshot.png` so a single run's artifacts stay grouped.
 
 Source: DevOps reviewer (concurrency on shared runners).
 

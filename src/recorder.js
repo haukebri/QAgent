@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { randomBytes } from 'node:crypto';
 
 const roundCost = (n) => Math.round((n ?? 0) * 1000) / 1000;
 const toSec = (ms) => Math.round((ms ?? 0) / 100) / 10;
@@ -48,7 +49,8 @@ export async function record(goal, modelId, verifierModelId, result, outDir = 'r
   const payload = buildPayload(goal, modelId, verifierModelId, result);
   const dir = resolve(outDir);
   await mkdir(dir, { recursive: true });
-  const stem = payload.timestamp.replace(/[:.]/g, '-');
+  const hash = randomBytes(2).toString('hex').toUpperCase();
+  const stem = `${payload.timestamp.slice(0, 16).replace(':', '-')}H${hash}`;
   const filepath = resolve(dir, `${stem}.json`);
   await writeFile(filepath, JSON.stringify(payload, null, 2), 'utf8');
   if (result.outcome !== 'pass') {

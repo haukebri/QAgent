@@ -42,7 +42,7 @@ Source: Architect reviewer (worst-case bounds), PM reviewer (budget predictabili
 
 Source: DevOps reviewer (concurrency on shared runners).
 
-### 5. Verifier could optionally be pure-code
+### 5. Verifier could optionally be pure-code ❌ REJECTED
 
 Today `src/verifier.js` is always an LLM judge. Some goals (e.g. "page contains 'Welcome'") have trivial deterministic verifiers; for those, a pure-code path would be cheaper and more reproducible.
 
@@ -70,7 +70,7 @@ Source: Architect reviewer.
 
 ## Status messaging (process)
 
-### 7. Maturity disclaimer was buried
+### 7. Maturity disclaimer was buried ❌ REJECTED 
 
 The "Status: pre-1.0" line was originally at the bottom of the README, after polished CLI Reference and ndjson schema sections. Adopters reading top-to-bottom would form a "production-ready" impression before hitting the disclaimer. Being addressed in this round (callout moved above the fold).
 

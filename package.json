@@ -16,8 +16,24 @@
   "bin": {
     "qagent": "src/cli.js"
   },
+  "files": [
+    ".env.template",
+    "src/browser.js",
+    "src/cli.js",
+    "src/config-cmd.js",
+    "src/config.js",
+    "src/executor.js",
+    "src/recorder.js",
+    "src/reporters.js",
+    "src/snapshot-compress.js",
+    "src/tools.js",
+    "src/verifier.js"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"No tests configured\""
   },
   "keywords": [],
   "dependencies": {

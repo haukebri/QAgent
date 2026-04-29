@@ -173,39 +173,48 @@ async function main() {
     ? (h) => { for (const r of reporters) r.onTurn?.(h); }
     : null;
 
-  const { browser, page } = await launchPage({ httpCredentials, headed });
+  const tRun = Date.now();
+  let browser;
+  let page;
+  let result;
   try {
-    let result;
+    ({ browser, page } = await launchPage({ httpCredentials, headed }));
     try {
       result = await runTodo(
         page, goal, model, apiKey, maxTurns, verifierModel, onTurn,
         testTimeoutSec * 1000, networkTimeoutSec * 1000, actionTimeoutSec * 1000,
       );
     } catch (err) {
-      result = {
-        outcome: 'error',
-        evidence: `runner crashed: ${err.message.split('\n')[0]}`,
-        llmVerdict: null,
-        turns: 0,
-        elapsedMs: 0,
-        tokens: { input: 0, output: 0, totalTokens: 0, cost: 0 },
-        verifierTokens: null,
-        finalUrl: page.url(),
-        history: [],
-        warnings: [],
-      };
+      result = buildErrorResult(err, page, tRun);
     }
-
-    for (const r of reporters) {
-      await r.onEnd?.(result, ctx);
-    }
-
-    if (result.outcome === 'pass') return 0;
-    if (result.outcome === 'fail') return 1;
-    return 3;
+  } catch (err) {
+    result = buildErrorResult(err, page, tRun);
   } finally {
-    await browser.close();
+    await browser?.close();
   }
+
+  for (const r of reporters) {
+    await r.onEnd?.(result, ctx);
+  }
+
+  if (result.outcome === 'pass') return 0;
+  if (result.outcome === 'fail') return 1;
+  return 3;
+}
+
+function buildErrorResult(err, page, startedAt) {
+  return {
+    outcome: 'error',
+    evidence: `runner crashed: ${err.message.split('\n')[0]}`,
+    llmVerdict: null,
+    turns: 0,
+    elapsedMs: Date.now() - startedAt,
+    tokens: { input: 0, output: 0, totalTokens: 0, cost: 0 },
+    verifierTokens: null,
+    finalUrl: page?.url?.() ?? 'about:blank',
+    history: [],
+    warnings: [],
+  };
 }
 
 function resolveTimeout(flagVal, envVal, projectVal, userVal, defaultSec, envName, configKey) {

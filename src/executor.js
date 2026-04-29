@@ -23,6 +23,7 @@ const SYSTEM_PROMPT =
   'Use "wait" when the page is in a transitional state (loading spinners, "Signing in..." buttons, disabled submit buttons). ' +
   "NEVER call done if the URL still matches a login page, or if loading indicators/disabled submit buttons are visible. " +
   'Wait first, then re-check.\n\n' +
+  'If the website requires basic auth, include the username and password in the URL as "https://username:password@example.com".\n\n' +
   'Pick "done" when the goal is clearly complete — include a "summary" that answers any question the goal asked for. ' +
   'Pick "fail" when the goal is clearly impossible on this page/app — include a clear "reason". ' +
   "Don't fabricate: if you cannot literally verify what the goal asks for, use \"fail\".\n\n" +
@@ -221,8 +222,10 @@ export async function runTodo(
     evidence = result.evidence;
     verifierTokens = result.tokens;
   } catch (err) {
-    warnings.push(`verifier unavailable: ${err.message.split('\n')[0]}; fell back to driver verdict`);
-    ({ outcome, evidence } = fallbackFromVerdict(verifierVerdict));
+    const message = err.message.split('\n')[0];
+    warnings.push(`verifier unavailable: ${message}`);
+    outcome = 'error';
+    evidence = `verifier unavailable: ${message}`;
   }
 
   const failureScreenshot = outcome !== 'pass' ? await captureScreenshot(page) : null;
@@ -251,14 +254,6 @@ function stepTokens(usage) {
 
 async function captureScreenshot(page) {
   return page.screenshot({ fullPage: true }).catch(() => null);
-}
-
-function fallbackFromVerdict(v) {
-  if (v.action === 'done' && v.summary) return { outcome: 'pass', evidence: v.summary };
-  if (v.action === 'fail' && v.reason) return { outcome: 'fail', evidence: v.reason };
-  if (v.action === 'done') return { outcome: 'fail', evidence: "driver said 'done' without summary" };
-  if (v.action === 'fail') return { outcome: 'fail', evidence: "driver said 'fail' without reason" };
-  return { outcome: 'fail', evidence: 'turn cap hit; no terminal verdict' };
 }
 
 function labelForRef(snapshot, ref) {

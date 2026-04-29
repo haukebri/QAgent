@@ -10,7 +10,7 @@ Each module is one file, one or two exported functions. No classes.
 
 Browser lifecycle. Exports `launchPage({ httpCredentials })` which opens
 chromium (Chrome channel with chromium fallback), applies the stealth
-defaults (UA, locale, timezone, viewport, webdriver/languages init script),
+defaults (UA, locale, local timezone, viewport, webdriver/languages init script),
 and returns `{ browser, page }`. Single source of truth for the
 bot-detection escalation ladder below.
 
@@ -53,8 +53,8 @@ Parse argv, call runner.
 ## dependencies
 
 - `playwright`: browser driver. Used only in browser.js and tools.js.
-- `pi-ai`: LLM calls. Used only in planner.js and executor.js.
-- `pi-agent-core`: agent loop. Used only in executor.js.
+- `pi-ai`: OpenRouter model lookup. Used by the CLI/demo.
+- `pi-agent-core`: driver and verifier LLM calls. Used by executor.js and verifier.js.
 
 ## data flow
 
@@ -88,8 +88,9 @@ runner aggregates results
 
 ## bot-detection escalation
 
-Default launch uses `channel: 'chrome'`, a realistic user-agent, locale,
-timezone, viewport, and an init script that hides `navigator.webdriver`.
+Default launch uses `channel: 'chrome'`, a realistic user-agent, locale, the
+host machine's timezone, viewport, and an init script that hides
+`navigator.webdriver`.
 This is enough for most sites (verified: aida.de Akamai, npmjs.com
 Cloudflare, google.com all pass).
 

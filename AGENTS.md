@@ -4,7 +4,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## Project Overview
 
-QAgent is an AI-driven test runner where tests are written in natural language and an LLM drives the browser via Playwright. The LLM picks actions; verifiers are pure code, not LLM.
+QAgent is an AI-driven test runner where tests are written in natural language and an LLM drives the browser via Playwright. A driver LLM picks actions; a separate verifier LLM judges whether the goal was achieved.
 
 See `docs/project-goal.md` for goals and `docs/project-architecture.md` for the full architecture spec.
 
@@ -26,7 +26,7 @@ Modules (each is one file, one or two exports, no classes):
 |---|---|---|
 | observer.js | Page → ai-mode ariaSnapshot YAML string (refs baked in by Playwright) | playwright |
 | tools.js | Browser actions (click, fill, navigate) via `(page, ref, args)`; resolves ref with `aria-ref=${ref}` | playwright |
-| verifier.js | End-state checks (pure code, no LLM) | — |
+| verifier.js | LLM judge: goal + trajectory + final snapshot → `{outcome, evidence}` | pi-agent-core |
 | planner.js | Goal → ordered todos with verifiable end-states (single LLM call, JSON output) | pi-ai |
 | executor.js | The loop: observe → LLM pick → act → verify. Exits on done/stuck/turn-cap | pi-ai, pi-agent-core |
 | recorder.js | Append JSON lines to a trace file | — |
@@ -42,4 +42,4 @@ Modules (each is one file, one or two exports, no classes):
 - Each module: max two exports; if more are needed, split or simplify.
 - Under 200 lines for the MVP.
 - ES modules (`"type": "module"` in package.json).
-- LLM calls go through OpenRouter (model-agnostic).
+- Driver and verifier LLM calls go through OpenRouter.

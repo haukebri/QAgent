@@ -1,6 +1,7 @@
 # QAgent release readiness
 
 Date: 2026-04-28
+Updated: 2026-04-29 with product decisions.
 
 This note merges two release-readiness reviews for the next npm package version
 after `0.4.0`. The combined review covered project-manager, architecture,
@@ -37,56 +38,34 @@ Negative signals:
 - `npm test` still fails with the placeholder "no test specified" script.
 - Public docs and package metadata do not fully match the shipped CLI.
 - Some runtime and reporter promises are not guaranteed in setup-failure paths.
-- Verifier behavior is currently LLM-based, while docs still describe pure-code
-  verification.
 - The npm artifact is not curated yet.
 
-## Decisions to make before publish
+## Decisions now taken
 
-- **Package name:** publish as `qagent` or `@qagent/cli`, then align every doc,
-  badge, install command, and release target.
-- **Verifier promise:** either document the current driver LLM + judge LLM model,
-  or replace the verifier with pure-code verification.
-- **CLI scope:** either ship `--print` / `-p` for this release, or remove it from
-  shipped docs until it lands.
-- **Browser environment:** use the host timezone by default, with optional config
-  or env override. Avoid hardcoding `Europe/Berlin`.
-- **Browser install failure:** add a clear pre-run guard/error for missing
-  Playwright browsers. Do not add a postinstall browser download.
+- **Package name:** publish as `@qagent/cli`; the binary remains `qagent`.
+- **Verifier promise:** QAgent uses a driver LLM plus an LLM judge verifier.
+  Remove all pure-code-verifier promises.
+- **Browser environment:** use the host machine's local timezone by default. Do
+  not add a timezone option yet.
+- **Browser install failure:** document browser dependencies and recovery steps
+  in the README. Do not add a postinstall browser download.
+- **LLM provider:** OpenRouter is the only supported provider for now; document
+  a short OpenRouter setup guide.
 - **Package contents:** add a `files` allowlist or intentionally keep docs and
   utility scripts in the tarball after making them accurate.
 
 ## Publish blockers
 
-### 1. Resolve package identity
+### 1. Finish package identity alignment
 
-`package.json` publishes `qagent@0.4.0`, but the README badge and Quick Start
-point users to `@qagent/cli`.
+The package should publish as `@qagent/cli`; the binary remains `qagent`.
+Before publish, verify `package.json`, `package-lock.json`, README badges,
+install commands, and `npm pack --dry-run` all agree.
 
-Observed registry state during review:
+### 2. Fix verifier fallback behavior
 
-- `qagent` latest: `0.0.1`
-- `@qagent/cli` latest: `0.3.1`
-
-Decision needed:
-
-- Publish this repo as `qagent`, and update README badges/install commands; or
-- Publish this repo as `@qagent/cli`, and update `package.json`.
-
-Do not publish until the package name, README, badges, npm install command, and
-release target all agree.
-
-### 2. Fix the verifier contract and fallback
-
-The README and package metadata say verifiers are pure code, but
-`src/verifier.js` currently uses a second LLM judge. That changes cost,
-determinism, trust, and failure semantics.
-
-There are two acceptable release paths:
-
-- Update the product promise everywhere to say QAgent uses a driver LLM plus an
-  LLM judge verifier; or
-- Replace the verifier with pure-code verification before publish.
+QAgent's verifier is intentionally an LLM judge. The release must not claim
+pure-code verification.
 
 Also fix the fallback path in `src/executor.js`: if the verifier throws, the
 runner can currently fall back to the driver verdict and pass a run when the
@@ -135,7 +114,6 @@ surprising; for AI agents and CI it can spend tokens after a typo.
 Expected behavior before publish:
 
 - `qagent --headad "<goal>"` exits 2 before browser launch.
-- `qagent --print "<goal>"` exits 2 until `--print` is implemented.
 - `qagent config list --projct` exits 2 instead of silently ignoring the typo.
 
 ### 6. Curate the npm artifact
@@ -159,52 +137,14 @@ package, make sure they do not advertise missing commands or stale architecture.
 has landed. Either remove `src/demo.js` from the package or clearly mark it as
 internal/legacy so users do not copy the old env-var path.
 
-### 8. Fix browser environment defaults
+## Documentation work for the next release
 
-`src/browser.js` hardcodes `timezoneId: 'Europe/Berlin'`. That is surprising in
-an OSS CLI and can silently break time-sensitive tests for users outside that
-timezone.
-
-Use the host timezone by default:
-
-```js
-Intl.DateTimeFormat().resolvedOptions().timeZone
-```
-
-Then optionally add a config/env override, such as `QAGENT_TIMEZONE`.
-
-## CLI feature gaps for the next release
-
-### `--print` / `-p`
-
-`docs/cli-approach.md` promises `--print` / `-p`, but `src/cli.js` does not
-implement it. Either ship it now or remove the promise from shipped docs.
-
-Smallest useful behavior:
-
-- Accept `--print` and `-p`.
-- Suppress live `list` progress output.
-- Preserve machine-readable reporters such as `ndjson`.
-- If no reporter remains after suppressing `list`, print a minimal final
-  outcome envelope.
-
-### `QAGENT_HEADED`
-
-Most runtime knobs have env-var paths, but `headed` currently does not. Add a
-boolean env var such as `QAGENT_HEADED=1` to match the CLI flag.
-
-### Browser install guard
-
-Catch Playwright's missing executable error and turn it into a clear setup
-error, for example:
-
-```text
-Chromium is not installed. Run: npx playwright install chromium
-```
-
-This should exit 2 for setup failure. If `--reporter=ndjson` is active and the
-failure happens after reporter setup, stdout should still end with a structured
-`done` envelope.
+- README should show browser dependency installation and recovery steps:
+  `npx playwright install chromium`, and on minimal Linux images
+  `npx playwright install-deps chromium`.
+- README should include a short OpenRouter guide covering API keys, model
+  configuration, env vars, and the current OpenRouter-only provider support.
+- Docs should not promise pure-code verification.
 
 ## Should fix before publish
 
@@ -262,7 +202,6 @@ screenshot files.
 Docs included in the npm tarball still mention planned or missing CLI features,
 including:
 
-- `--print` / `-p`
 - `--config`
 - `qagent config get`
 - `qagent config path`
@@ -273,31 +212,10 @@ including:
 Either update these docs to describe current behavior or exclude design docs
 from the published package.
 
-### Fix env template
-
-`.env.template` uses the old demo variables:
-
-```bash
-LLM_MODEL=...
-LLM_API_KEY=...
-```
-
-The CLI reads:
-
-```bash
-QAGENT_MODEL=...
-QAGENT_API_KEY=...
-OPENROUTER_API_KEY=...
-```
-
-Update the template or exclude it from the package.
-
 ### Fix model examples
 
-Current `pi-ai` recognizes `anthropic/claude-sonnet-4.5`, but not
-`anthropic/claude-sonnet-4-5` or `anthropic/claude-opus-4-5`.
-
-Use model examples that are valid with the pinned dependency, or document that
+Use model examples that are valid with the pinned dependency, such as
+`qwen/qwen3.5-flash-02-23` or `anthropic/claude-sonnet-4.5`, and document that
 available OpenRouter model IDs are limited to the `pi-ai` registry bundled with
 the installed package.
 
@@ -325,7 +243,8 @@ release once the blockers above are addressed.
   knob, and large snapshots can stress both driver and verifier.
 - Detect no-progress loops earlier instead of spending all `maxTurns`.
 - Consider trimming or summarizing very large verifier snapshots before judging.
-- Consider configurable user-agent and locale after fixing timezone.
+- Consider configurable user-agent and locale later. Timezone currently follows
+  the host machine.
 - Consider auto-switching to `ndjson` when stdout is not a TTY, or at least make
   the agent-oriented invocation more prominent.
 - Add a deterministic trace output path option, such as `--trace-out`, so agents
@@ -393,46 +312,27 @@ Expected result:
 - No browser launch or LLM call for invalid CLI/config input.
 - Machine-readable reporters keep stdout parseable.
 
-Run browser environment checks after implementing the related fixes:
+Run browser environment checks after implementing the local timezone behavior:
 
 ```bash
-QAGENT_HEADED=1 qagent "Open https://example.com and verify the heading exists"
-QAGENT_TIMEZONE=Asia/Tokyo qagent "Open a timezone test page and verify Tokyo"
+qagent "Open a timezone test page and verify the displayed timezone matches this machine"
 ```
 
 Expected result:
 
-- `QAGENT_HEADED=1` opens a browser window.
-- Timezone-sensitive pages see the host timezone by default and the configured
-  timezone when overridden.
-
-Run print-mode checks if `--print` ships:
-
-```bash
-qagent "Open https://example.com and verify the heading exists" \
-  --print \
-  --reporter=ndjson | tail -1 | jq -r .outcome
-```
-
-Expected result:
-
-- Output is parseable.
-- No list-reporter progress or ANSI text appears on stdout.
-- Final value is `pass`, `fail`, or `error`.
+- Timezone-sensitive pages see the host timezone by default.
 
 ## Recommended release sequence
 
-1. Decide and align the npm package name.
-2. Fix verifier truth and verifier-failure fallback.
+1. Verify `@qagent/cli` package identity is aligned across package metadata, README, and npm dry-run output.
+2. Fix verifier-failure fallback.
 3. Guarantee reporter `done` envelopes for setup/runtime errors.
 4. Make CLI and config validation strict.
-5. Add `--print` / `-p` or remove it from shipped docs.
-6. Add `QAGENT_HEADED` and browser install guard.
-7. Fix browser timezone default and optional override.
-8. Add the minimal passing test gate.
-9. Curate package contents and remove/quarantine legacy demo paths.
-10. Update README, `.env.template`, and shipped docs.
-11. Add Node engines, keywords, and `prepublishOnly`.
-12. Re-run pack/install/audit/smoke checks.
-13. Publish with a clear pre-1.0 changelog.
-
+5. Document browser dependency installation and recovery in README.
+6. Verify browser timezone default uses the host machine.
+7. Add the minimal passing test gate.
+8. Curate package contents and remove/quarantine legacy demo paths.
+9. Update README, `.env.template`, and shipped docs.
+10. Add Node engines, keywords, and `prepublishOnly`.
+11. Re-run pack/install/audit/smoke checks.
+12. Publish with a clear pre-1.0 changelog.

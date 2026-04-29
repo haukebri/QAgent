@@ -26,7 +26,7 @@ const DEFAULTS = {
 };
 
 const KEY_DOCS = {
-  model:          'OpenRouter LLM model id (e.g. anthropic/claude-sonnet-4-5)',
+  model:          'OpenRouter LLM model id (e.g. qwen/qwen3.5-flash-02-23)',
   verifierModel:  'Verifier model id; defaults to model when unset',
   apiKey:         'OpenRouter API key (sk-or-...)',
   maxTurns:       'Positive integer turn cap',

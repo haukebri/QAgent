@@ -10,7 +10,7 @@ Harness opens a browser, figures out the steps, runs them, checks the result. Pa
 
 ## how
 
-Script drives the browser. LLM only picks the next action. Verifiers are code, not LLM.
+Script drives the browser. A driver LLM picks the next action. A separate verifier LLM judges the final browser state.
 
 ## what we do not build
 
@@ -24,7 +24,7 @@ Script drives the browser. LLM only picks the next action. Verifiers are code, n
 - open source
 - runs local or in CI
 - small local models eventually. start with a big one, dumb it down later.
-- model provider via OpenRouter so we can swap freely.
+- OpenRouter is the only supported model provider for now.
 
 ## why
 

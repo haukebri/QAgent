@@ -3,19 +3,24 @@
 [![npm version](https://img.shields.io/npm/v/@qagent/cli.svg)](https://www.npmjs.com/package/@qagent/cli)
 [![license](https://img.shields.io/npm/l/@qagent/cli.svg)](LICENSE)
 
-AI-driven end-to-end browser test runner. You write a goal in natural language; an LLM picks actions, Playwright drives the browser, and verifiers are pure code.
+AI-driven end-to-end browser test runner. You write a goal in natural language; a driver LLM picks browser actions, Playwright drives the browser, and a separate LLM judge verifies the result.
 
 Runs interactively for humans (live progress, ✓/✗ summary) or streams JSON events for AI agents like Claude Code (`--reporter=ndjson`).
 
-> **Status:** pre-1.0, experimental. One inline goal per invocation; multi-goal specs and orchestration are not yet built. Cost scales with snapshot size and turn count — `--max-turns` (default 50) is currently the only spending knob.
+> **Status:** pre-1.0, experimental. One inline goal per invocation; multi-goal specs and orchestration are not yet built. Cost scales with snapshot size, driver turns, and verifier calls — `--max-turns` (default 50) is currently the main spending knob.
 
 ## Quick Start
 
+Requirements:
+
+- Node.js 20 or newer.
+- An OpenRouter API key.
+- A Playwright Chromium browser install, or a reachable system Chrome.
+
 ```bash
 npm install -g @qagent/cli
-npx playwright install chromium     # one-time browser download (skip if Chrome is already installed)
+npx playwright install chromium
 
-# your OpenRouter key
 qagent config set apiKey sk-or-...
 qagent config set model qwen/qwen3.5-flash-02-23
 qagent "Open https://example.com and verify that the page heading exists"
@@ -32,6 +37,54 @@ Output:
 ✓ PASS — The final snapshot confirms the presence of the heading 'Example Domain'.
 2 turns · 5.0s · $0.0001
 ```
+
+## Browser Install
+
+QAgent does not download browsers during `npm install`. Install Chromium once on each machine or CI image:
+
+```bash
+npx playwright install chromium
+```
+
+On Linux CI images that are missing browser system libraries, run:
+
+```bash
+npx playwright install-deps chromium
+npx playwright install chromium
+```
+
+If a run fails with a Playwright message like "Executable doesn't exist" or asks you to run `playwright install`, install Chromium with the commands above and retry. If your machine already has Google Chrome installed, QAgent tries that first and falls back to Playwright's bundled Chromium.
+
+## OpenRouter Setup
+
+OpenRouter is currently the only supported LLM provider. QAgent uses one model for browser-driving actions and, by default, the same model as the LLM judge verifier.
+
+1. Create an API key at [openrouter.ai/keys](https://openrouter.ai/keys).
+2. Store it once:
+
+   ```bash
+   qagent config set apiKey sk-or-...
+   ```
+
+3. Pick a model known to the installed `pi-ai` OpenRouter registry:
+
+   ```bash
+   qagent config set model qwen/qwen3.5-flash-02-23
+   ```
+
+4. Optionally use a different verifier model:
+
+   ```bash
+   qagent config set verifierModel qwen/qwen3.5-flash-02-23
+   ```
+
+For CI, prefer env vars over config files:
+
+```bash
+QAGENT_API_KEY=sk-or-... QAGENT_MODEL=qwen/qwen3.5-flash-02-23 qagent "<goal>"
+```
+
+`OPENROUTER_API_KEY` is accepted as a fallback for `QAGENT_API_KEY`. If QAgent says `unknown model`, choose a model ID supported by the installed package version.
 
 ## Use Cases
 
@@ -61,12 +114,12 @@ QAgent reads from `~/.config/qagent/config.json` (user, XDG-style) and `./qagent
 
 ```bash
 qagent config set apiKey sk-or-...
-qagent config set --project model anthropic/claude-opus-4-5
+qagent config set --project model anthropic/claude-sonnet-4.5
 qagent config list                # show effective values + their sources
 qagent config --help              # all keys, types, defaults, valid values
 ```
 
-Recognized keys: `model`, `verifierModel`, `apiKey`, `maxTurns`, `reporter`, `outputDir`, `headed`.
+Recognized keys: `model`, `verifierModel`, `apiKey`, `maxTurns`, `testTimeout`, `networkTimeout`, `actionTimeout`, `reporter`, `outputDir`, `headed`.
 
 ## For AI Agents
 
@@ -145,14 +198,14 @@ Stderr stays clean — only the trace reporter writes its path confirmation ther
   timeout 11m qagent "<goal>" --test-timeout=600 --reporter=ndjson   # hard kill if even the verifier hangs
   ```
 
-- **Browsers don't auto-install.** `npx playwright install chromium` once per runner image (not needed if a system Chrome is present and reachable).
+- **Browsers don't auto-install.** Run `npx playwright install chromium` once per runner image. On minimal Linux images, run `npx playwright install-deps chromium` first.
 
 ## Philosophy
 
-- Two-stage: a **driver LLM** picks the next action; a **judge LLM** verifies the end-state. Browser tools (click, fill, navigate) are pure code.
+- Two-stage: a **driver LLM** picks the next action; a **judge LLM** verifies the end-state. Browser tools (click, fill, navigate) are deterministic Playwright calls.
 - No spec files yet — one inline goal per invocation.
 - No classes, no folders, no TypeScript. Functions and modules.
-- OpenRouter only — model-agnostic via the `model` config key.
+- OpenRouter only for now — select supported OpenRouter model IDs via the `model` config key.
 
 ## CLI Reference
 

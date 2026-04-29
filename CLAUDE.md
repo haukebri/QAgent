@@ -42,4 +42,4 @@ Modules (each is one file, one or two exports, no classes):
 - Under 200 lines for the MVP.
 - Simplicity is better than abstraction
 - ES modules (`"type": "module"` in package.json).
-- LLM calls go through OpenRouter (model-agnostic).
+- Driver and verifier LLM calls go through OpenRouter.

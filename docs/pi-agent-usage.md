@@ -18,17 +18,17 @@ Pin to exact `0.70.0` (no caret) in `package.json` — one-maintainer project, w
 
 ## env and API keys (OpenRouter)
 
-pi-ai reads `OPENROUTER_API_KEY` from `process.env` — nothing else. Our `.env` uses `LLM_API_KEY` and `LLM_MODEL`, so we do **not** rely on auto-pickup. Cleanest pattern: pass the key via the Agent's `getApiKey` hook, which wins over env.
+pi-ai reads `OPENROUTER_API_KEY` from `process.env` — nothing else. QAgent also supports `QAGENT_API_KEY` and `QAGENT_MODEL`, so we do **not** rely on pi-ai auto-pickup. Cleanest pattern: pass the key via the Agent's `getApiKey` hook, which wins over env.
 
 ```js
 // run with: node --env-file=.env src/executor.js
 const agent = new Agent({
-  initialState: { systemPrompt, model: getModel("openrouter", process.env.LLM_MODEL) },
-  getApiKey: async (_provider) => process.env.LLM_API_KEY,
+  initialState: { systemPrompt, model: getModel("openrouter", process.env.QAGENT_MODEL) },
+  getApiKey: async (_provider) => process.env.QAGENT_API_KEY,
 });
 ```
 
-Alternative: `process.env.OPENROUTER_API_KEY = process.env.LLM_API_KEY` at startup and skip `getApiKey`. Alternative env loader: `npm i dotenv` + `import "dotenv/config"` — we prefer `--env-file` (zero deps).
+Alternative: set `OPENROUTER_API_KEY` and skip `getApiKey`. Alternative env loader: `npm i dotenv` + `import "dotenv/config"` — we prefer `--env-file` (zero deps).
 
 ## getting a model
 
@@ -37,7 +37,7 @@ Alternative: `process.env.OPENROUTER_API_KEY = process.env.LLM_API_KEY` at start
 ```js
 import { getModel } from "@mariozechner/pi-ai";
 const model = getModel("openrouter", "anthropic/claude-sonnet-4.5");
-if (!model) throw new Error(`unknown model: ${process.env.LLM_MODEL}`);
+if (!model) throw new Error(`unknown model: ${process.env.QAGENT_MODEL}`);
 ```
 
 Gotcha: unknown id → silent `undefined` → cryptic downstream error. Always assert.
@@ -53,12 +53,12 @@ import { getModel, Type } from "@mariozechner/pi-ai";
 const agent = new Agent({
   initialState: {
     systemPrompt: "Drive the browser to accomplish the goal.",
-    model: getModel("openrouter", process.env.LLM_MODEL),
+    model: getModel("openrouter", process.env.QAGENT_MODEL),
     tools: [clickTool /*, fillTool, navigateTool */],
     // thinkingLevel: "off",   // off | minimal | low | medium | high | xhigh
     // toolExecution: "sequential",  // see gotchas
   },
-  getApiKey: async () => process.env.LLM_API_KEY,
+  getApiKey: async () => process.env.QAGENT_API_KEY,
 });
 ```
 

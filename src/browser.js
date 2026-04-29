@@ -7,6 +7,10 @@ import { chromium } from 'playwright';
 const USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
+function localTimezone() {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
+
 export async function launchPage({ httpCredentials, headed = false } = {}) {
   const args = ['--disable-blink-features=AutomationControlled'];
   const headless = !headed;
@@ -19,7 +23,7 @@ export async function launchPage({ httpCredentials, headed = false } = {}) {
   const context = await browser.newContext({
     userAgent: USER_AGENT,
     locale: 'en-US',
-    timezoneId: 'Europe/Berlin',
+    timezoneId: localTimezone(),
     viewport: { width: 1366, height: 820 },
     ...(httpCredentials ? { httpCredentials } : {}),
   });

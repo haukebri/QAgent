@@ -129,7 +129,7 @@ export async function runTodo(
         prevCompressionRatio = stats.origBytes > 0 ? stats.compressedBytes / stats.origBytes : 1;
       }
 
-      const { action, usage, parseError } = await askNextAction({ agent, goal, url, messageSnapshot, isBaselineTurn, baselineTurn: baseline.turn, lastError, snapshotDelta });
+      const { action, usage, parseError, llmError } = await askNextAction({ agent, goal, url, messageSnapshot, isBaselineTurn, baselineTurn: baseline.turn, lastError, snapshotDelta });
       if (usage) {
         tokens.input += usage.input ?? 0;
         tokens.output += usage.output ?? 0;
@@ -137,6 +137,15 @@ export async function runTodo(
         tokens.cacheWrite += usage.cacheWrite ?? 0;
         tokens.totalTokens += usage.totalTokens ?? 0;
         tokens.cost += usage.cost?.total ?? 0;
+      }
+
+      if (llmError) {
+        fatalError = `driver LLM unavailable: ${oneLine(llmError)}`;
+        const llmEntry = { turn: turns, atMs: Date.now() - t0, error: fatalError, url };
+        if (usage) llmEntry.tokens = stepTokens(usage);
+        history.push(llmEntry);
+        onTurn?.(llmEntry);
+        break;
       }
 
       if (parseError) {
@@ -293,6 +302,10 @@ function labelForRef(snapshot, ref) {
   return name ? `${role} '${name}'` : role;
 }
 
+function oneLine(value) {
+  return String(value ?? 'unknown error').split('\n')[0];
+}
+
 async function askNextAction({ agent, goal, url, messageSnapshot, isBaselineTurn, baselineTurn, lastError, snapshotDelta }) {
   const isFirstTurn = agent.state.messages.length === 0;
   const message = isFirstTurn
@@ -300,8 +313,16 @@ async function askNextAction({ agent, goal, url, messageSnapshot, isBaselineTurn
     : buildFollowUpPrompt({ url, snapshot: messageSnapshot, lastError, snapshotDelta, isBaselineTurn, baselineTurn });
   await agent.prompt(message);
   const last = [...agent.state.messages].reverse().find(m => m.role === 'assistant');
-  const text = last?.content.filter(c => c.type === 'text').map(c => c.text).join('') ?? '';
   const usage = last?.usage ?? null;
+  if (!last) {
+    return { action: null, usage, llmError: 'no assistant message returned by LLM' };
+  }
+  const errorMessage = last?.errorMessage ?? agent.state.errorMessage;
+  if (last?.stopReason === 'error' || errorMessage) {
+    return { action: null, usage, llmError: errorMessage ?? 'provider returned an error stop reason' };
+  }
+  const content = Array.isArray(last?.content) ? last.content : [];
+  const text = content.filter(c => c.type === 'text').map(c => c.text).join('');
   const jsonStr = extractActionJson(text);
   if (!jsonStr) {
     return { action: null, usage, parseError: `no JSON object in LLM response (got: ${text.slice(0, 200)})` };

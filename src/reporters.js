@@ -53,21 +53,22 @@ function listReporter() {
       process.stdout.write(`${c.cyan}▶${c.reset} ${ctx.goal}\n\n`);
     },
     onTurn(h) {
-      const a = h.action ?? {};
-      const verb = (a.action ?? '?').padEnd(8);
+      const a = h.action ?? null;
+      const actionName = a?.action ?? (h.error ? 'llm' : '?');
+      const verb = actionName.padEnd(8);
       const num = String(h.turn).padStart(2);
       const indicator = h.error ? `${c.red}✗${c.reset}  ` : '   ';
-      const body = describeAction(a, h.target);
+      const body = a ? describeAction(a, h.target) : '';
       const turnMs = h.atMs != null ? h.atMs - lastAtMs : null;
-      const showDur = a.action !== 'wait' && turnMs != null;
+      const showDur = actionName !== 'wait' && turnMs != null;
       const dur = showDur ? `  ${c.dim}${fmtMs(turnMs)}${c.reset}` : '';
       process.stdout.write(`${indicator}${num}  ${verb}  ${body}${dur}\n`);
       if (h.error) {
         process.stdout.write(`       ${c.red}— ${h.error}${c.reset}\n`);
       } else if (
-        a.action !== 'navigate' &&
-        a.action !== 'done' &&
-        a.action !== 'fail' &&
+        actionName !== 'navigate' &&
+        actionName !== 'done' &&
+        actionName !== 'fail' &&
         h.url &&
         h.url !== lastUrl
       ) {

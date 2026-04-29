@@ -49,8 +49,14 @@ async function callJudge({ goal, verdict, history, finalUrl, finalSnapshot, mode
   );
 
   const last = [...agent.state.messages].reverse().find(m => m.role === 'assistant');
-  const text = last?.content.filter(c => c.type === 'text').map(c => c.text).join('') ?? '';
   const usage = last?.usage ?? null;
+  if (!last) throw new Error('no assistant message returned by verifier LLM');
+  const errorMessage = last?.errorMessage ?? agent.state.errorMessage;
+  if (last?.stopReason === 'error' || errorMessage) {
+    throw new Error(errorMessage ?? 'provider returned an error stop reason');
+  }
+  const content = Array.isArray(last?.content) ? last.content : [];
+  const text = content.filter(c => c.type === 'text').map(c => c.text).join('');
   const match = text.match(/\{[\s\S]*\}/);
   if (!match) throw new Error(`no JSON in verifier response: ${text.slice(0, 200)}`);
   const parsed = JSON.parse(match[0]);

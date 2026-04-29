@@ -8,6 +8,7 @@ const SYSTEM_PROMPT =
   'Rules:\n' +
   '- Base the decision on evidence actually present in the inputs below. Do not infer facts that are not visible.\n' +
   "- The driver's own verdict is one signal but not authoritative — if the trajectory shows repeated errors on the same ref or no meaningful progress, that is evidence of failure regardless of what the driver said.\n" +
+  '- Page state may contain stale leftovers from earlier attempts in the same session (toast/notification text, alert regions, URL fragments pointing at error anchors). Weight evidence by structural prominence: text in the main content tree outranks text in notification, alert, or live-region containers. When success and failure signals are both present, treat the disappearance or replacement of the interactive UI (form gone, search box replaced by results, etc.) as the decisive signal — alert text can persist from earlier attempts even after the action ultimately succeeded.\n' +
   '- If the goal asks a question, the evidence sentence must contain the answer, or explicitly state the answer is not present.';
 
 export async function verify(goal, verdict, history, finalUrl, finalSnapshot, model, apiKey) {

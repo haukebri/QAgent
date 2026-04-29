@@ -33,6 +33,7 @@ export function buildPayload(goal, modelId, verifierModelId, result) {
     outcome: result.outcome,
     reasoning: result.llmVerdict?.summary ?? null,
     llmVerdict: { reason: result.llmVerdict?.reason ?? null },
+    evidence: result.evidence ?? null,
     finalUrl: result.finalUrl,
     stats: {
       turns: result.turns,

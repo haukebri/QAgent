@@ -129,7 +129,7 @@ export async function runTodo(
         prevCompressionRatio = stats.origBytes > 0 ? stats.compressedBytes / stats.origBytes : 1;
       }
 
-      const { action, usage } = await askNextAction({ agent, goal, url, messageSnapshot, isBaselineTurn, baselineTurn: baseline.turn, lastError, snapshotDelta });
+      const { action, usage, parseError } = await askNextAction({ agent, goal, url, messageSnapshot, isBaselineTurn, baselineTurn: baseline.turn, lastError, snapshotDelta });
       if (usage) {
         tokens.input += usage.input ?? 0;
         tokens.output += usage.output ?? 0;
@@ -137,6 +137,15 @@ export async function runTodo(
         tokens.cacheWrite += usage.cacheWrite ?? 0;
         tokens.totalTokens += usage.totalTokens ?? 0;
         tokens.cost += usage.cost?.total ?? 0;
+      }
+
+      if (parseError) {
+        lastError = `your previous response was not valid JSON: ${parseError}. Respond with a single JSON object only — no markdown fences, no commentary, no examples.`;
+        const parseEntry = { turn: turns, atMs: Date.now() - t0, error: lastError, url };
+        if (usage) parseEntry.tokens = stepTokens(usage);
+        history.push(parseEntry);
+        onTurn?.(parseEntry);
+        continue;
       }
 
       if (action.action === 'done' || action.action === 'fail') {
@@ -170,16 +179,18 @@ export async function runTodo(
       }
       const tAction = Date.now();
       try {
+        let recoveredVia = null;
         if (action.action === 'navigate') await navigate(page, action.url, networkTimeoutMs);
-        else if (action.action === 'click') await click(page, action.ref, actionTimeoutMs);
-        else if (action.action === 'fill') await fill(page, action.ref, action.value, actionTimeoutMs);
-        else if (action.action === 'selectOption') await selectOption(page, action.ref, action.value, actionTimeoutMs);
-        else if (action.action === 'pressKey') await pressKey(page, action.ref, action.key, actionTimeoutMs);
-        else if (action.action === 'type') await type(page, action.ref, action.value, actionTimeoutMs);
+        else if (action.action === 'click') recoveredVia = await click(page, action.ref, actionTimeoutMs);
+        else if (action.action === 'fill') recoveredVia = await fill(page, action.ref, action.value, actionTimeoutMs);
+        else if (action.action === 'selectOption') recoveredVia = await selectOption(page, action.ref, action.value, actionTimeoutMs);
+        else if (action.action === 'pressKey') recoveredVia = await pressKey(page, action.ref, action.key, actionTimeoutMs);
+        else if (action.action === 'type') recoveredVia = await type(page, action.ref, action.value, actionTimeoutMs);
         else if (action.action === 'wait') await page.waitForTimeout(action.ms ?? 1000);
         else throw new Error(`unknown action: ${action.action}`);
         entry.ms = Date.now() - tAction;
         entry.url = page.url();
+        if (recoveredVia) entry.recoveredVia = recoveredVia;
         history.push(entry);
         onTurn?.(entry);
         lastError = null;
@@ -291,9 +302,39 @@ async function askNextAction({ agent, goal, url, messageSnapshot, isBaselineTurn
   const last = [...agent.state.messages].reverse().find(m => m.role === 'assistant');
   const text = last?.content.filter(c => c.type === 'text').map(c => c.text).join('') ?? '';
   const usage = last?.usage ?? null;
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error(`no JSON in LLM response: ${text}`);
-  return { action: JSON.parse(match[0]), usage };
+  const jsonStr = extractActionJson(text);
+  if (!jsonStr) {
+    return { action: null, usage, parseError: `no JSON object in LLM response (got: ${text.slice(0, 200)})` };
+  }
+  try {
+    return { action: JSON.parse(jsonStr), usage };
+  } catch (err) {
+    return { action: null, usage, parseError: `${err.message}; raw: ${jsonStr.slice(0, 200)}` };
+  }
+}
+
+// Extract the first balanced JSON object from an LLM response. Strips markdown
+// fences (```json ... ```), then walks brace depth while respecting strings
+// and escapes — so a `}` inside a string value won't end the match early, and
+// a second JSON object after the first is ignored.
+function extractActionJson(text) {
+  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  const src = fenceMatch ? fenceMatch[1] : text;
+  const start = src.indexOf('{');
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < src.length; i++) {
+    const c = src[i];
+    if (escape) { escape = false; continue; }
+    if (c === '\\') { escape = true; continue; }
+    if (c === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (c === '{') depth++;
+    else if (c === '}' && --depth === 0) return src.slice(start, i + 1);
+  }
+  return null;
 }
 
 function buildInitialPrompt({ goal, url, snapshot, baselineTurn }) {

@@ -23,19 +23,23 @@ export async function observe(page) {
   return await page.locator('body').ariaSnapshot({ mode: 'ai' });
 }
 
-// When an action fails, name the element that was on top at the target's
-// centre so the LLM can pattern-match the blocker (#usercentrics-root,
-// #onetrust-banner-sdk, newsletter modals, ad overlays, …) and react
-// accordingly. Pierces shadow DOM so buttons inside consent banners are
-// traced back to their recognizable host in the main document.
-async function describeBlocker(locator) {
+// Diagnose why a click failed. Returns one of:
+//   { kind: 'hidden', detail: '0×0' | 'offscreen' }   — element exists but isn't clickable as designed
+//   { kind: 'overlay', detail: 'p.typo' }             — element is visible but obscured by something on top
+//   null                                              — neither; let the raw Playwright error surface
+// The kinds are distinct because they need different LLM hints: "hidden" means
+// the wrapper is the real target (label/card pattern); "overlay" means dismiss
+// the modal/banner first.
+async function diagnoseClickFailure(locator) {
   try {
     return await locator.evaluate(el => {
       const r = el.getBoundingClientRect();
-      if (r.width === 0 || r.height === 0) return null;
+      if (r.width === 0 || r.height === 0) return { kind: 'hidden', detail: '0×0' };
       const cx = r.x + r.width / 2;
       const cy = r.y + r.height / 2;
-      if (cx < 0 || cy < 0 || cx >= window.innerWidth || cy >= window.innerHeight) return null;
+      if (cx < 0 || cy < 0 || cx >= window.innerWidth || cy >= window.innerHeight) {
+        return { kind: 'hidden', detail: 'offscreen' };
+      }
 
       let top = document.elementFromPoint(cx, cy);
       while (top && top.shadowRoot) {
@@ -63,36 +67,107 @@ async function describeBlocker(locator) {
         typeof report.className === 'string' && report.className.trim()
           ? '.' + report.className.trim().split(/\s+/)[0]
           : '';
-      return `${report.tagName.toLowerCase()}${id}${cls}`;
+      return { kind: 'overlay', detail: `${report.tagName.toLowerCase()}${id}${cls}` };
     });
   } catch {
     return null;
   }
 }
 
-async function actOrDescribe(locator, verb, action) {
+// Styled-radio / styled-checkbox pattern: native input is hidden (0×0 or
+// pointer-events:none), the visible thing is a wrapper card. When click on
+// the input fails, walk up the DOM to the first clickable ancestor and click
+// that instead. Priority: <label> → role-based → onclick → cursor:pointer.
+// Restricted to radio/checkbox so we don't fire wrong handlers when an
+// arbitrary disabled control fails.
+async function tryClickClickableAncestor(locator, actionTimeoutMs) {
+  try {
+    const isFormControl = await locator.evaluate(el => {
+      if (el.tagName !== 'INPUT') return false;
+      return el.type === 'checkbox' || el.type === 'radio';
+    });
+    if (!isFormControl) return false;
+    const handle = await locator.evaluateHandle(el => {
+      let node = el.parentElement;
+      while (node && node !== document.body) {
+        const r = node.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) {
+          const cs = window.getComputedStyle(node);
+          if (cs.visibility !== 'hidden' && cs.display !== 'none') {
+            const role = node.getAttribute('role');
+            if (
+              node.tagName === 'LABEL' ||
+              role === 'button' || role === 'link' ||
+              role === 'radio' || role === 'checkbox' ||
+              node.onclick !== null ||
+              cs.cursor === 'pointer'
+            ) {
+              return node;
+            }
+          }
+        }
+        node = node.parentElement;
+      }
+      return null;
+    });
+    const elementHandle = handle.asElement();
+    if (!elementHandle) {
+      await handle.dispose();
+      return false;
+    }
+    try {
+      await elementHandle.click({ timeout: actionTimeoutMs });
+      return true;
+    } finally {
+      await elementHandle.dispose().catch(() => {});
+    }
+  } catch {
+    return false;
+  }
+}
+
+async function actOrDescribe(locator, verb, action, actionTimeoutMs) {
   try {
     await action();
+    return null;
   } catch (err) {
-    const blocker = await describeBlocker(locator);
-    if (blocker) throw new Error(`${verb} blocked by overlay: ${blocker}`);
+    if (verb === 'click') {
+      const diag = await diagnoseClickFailure(locator);
+      if (diag && (diag.kind === 'hidden' || diag.kind === 'overlay')) {
+        if (await tryClickClickableAncestor(locator, actionTimeoutMs)) {
+          return 'ancestor';
+        }
+      }
+      if (diag?.kind === 'hidden') {
+        throw new Error(`click target is hidden (${diag.detail}); no clickable ancestor found`);
+      }
+      if (diag?.kind === 'overlay') {
+        throw new Error(`click blocked by overlay: ${diag.detail}`);
+      }
+      throw err;
+    }
+    // Non-click verbs keep the original overlay-only behavior.
+    const diag = await diagnoseClickFailure(locator);
+    if (diag?.kind === 'overlay') {
+      throw new Error(`${verb} blocked by overlay: ${diag.detail}`);
+    }
     throw err;
   }
 }
 
 export async function click(page, ref, actionTimeoutMs) {
   const locator = page.locator(`aria-ref=${ref}`);
-  await actOrDescribe(locator, 'click', () => locator.click({ timeout: actionTimeoutMs }));
+  return await actOrDescribe(locator, 'click', () => locator.click({ timeout: actionTimeoutMs }), actionTimeoutMs);
 }
 
 export async function fill(page, ref, value, actionTimeoutMs) {
   const locator = page.locator(`aria-ref=${ref}`);
-  await actOrDescribe(locator, 'fill', () => locator.fill(value, { timeout: actionTimeoutMs }));
+  return await actOrDescribe(locator, 'fill', () => locator.fill(value, { timeout: actionTimeoutMs }), actionTimeoutMs);
 }
 
 export async function selectOption(page, ref, value, actionTimeoutMs) {
   const locator = page.locator(`aria-ref=${ref}`);
-  await actOrDescribe(locator, 'selectOption', () => locator.selectOption(value, { timeout: actionTimeoutMs }));
+  return await actOrDescribe(locator, 'selectOption', () => locator.selectOption(value, { timeout: actionTimeoutMs }), actionTimeoutMs);
 }
 
 // Ref-less form sends the keystroke to whatever currently has focus — Playwright
@@ -103,10 +178,10 @@ export async function selectOption(page, ref, value, actionTimeoutMs) {
 export async function pressKey(page, ref, key, actionTimeoutMs) {
   if (ref) {
     const locator = page.locator(`aria-ref=${ref}`);
-    await actOrDescribe(locator, 'pressKey', () => locator.press(key, { timeout: actionTimeoutMs }));
-  } else {
-    await page.keyboard.press(key);
+    return await actOrDescribe(locator, 'pressKey', () => locator.press(key, { timeout: actionTimeoutMs }), actionTimeoutMs);
   }
+  await page.keyboard.press(key);
+  return null;
 }
 
 // pressSequentially appends — it does NOT clear the existing value. Used as a
@@ -114,7 +189,7 @@ export async function pressKey(page, ref, key, actionTimeoutMs) {
 // where the field is empty anyway, so the missing clear is fine.
 export async function type(page, ref, value, actionTimeoutMs) {
   const locator = page.locator(`aria-ref=${ref}`);
-  await actOrDescribe(locator, 'type', () => locator.pressSequentially(value, { timeout: actionTimeoutMs }));
+  return await actOrDescribe(locator, 'type', () => locator.pressSequentially(value, { timeout: actionTimeoutMs }), actionTimeoutMs);
 }
 
 // waitUntil: 'load' (not 'networkidle' — Playwright discourages it; chatty

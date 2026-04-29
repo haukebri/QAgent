@@ -16,19 +16,20 @@ npm install @mariozechner/pi-agent-core@0.70.0 @mariozechner/pi-ai@0.70.0
 
 Pin to exact `0.70.0` (no caret) in `package.json` — one-maintainer project, weekly releases. No postinstall. Both are ESM, Node >=20. `pi-ai` bundles every provider SDK (Anthropic, OpenAI, Google, Mistral, Bedrock) — install is heavy but transparent.
 
-## env and API keys (OpenRouter)
+## env and API keys
 
-pi-ai reads `OPENROUTER_API_KEY` from `process.env` — nothing else. QAgent also supports `QAGENT_API_KEY` and `QAGENT_MODEL`, so we do **not** rely on pi-ai auto-pickup. Cleanest pattern: pass the key via the Agent's `getApiKey` hook, which wins over env.
+QAgent passes the resolved API key via the Agent's `getApiKey` hook (which wins over any env var pi-ai might inspect). The provider is selected at the call site through `getModel(provider, modelId)`. See `src/providers.js` for QAgent's resolution map and per-provider env-var fallbacks.
 
 ```js
 // run with: node --env-file=.env src/executor.js
+const provider = "openrouter"; // or "anthropic", "openai", "google", ...
 const agent = new Agent({
-  initialState: { systemPrompt, model: getModel("openrouter", process.env.QAGENT_MODEL) },
+  initialState: { systemPrompt, model: getModel(provider, process.env.QAGENT_MODEL) },
   getApiKey: async (_provider) => process.env.QAGENT_API_KEY,
 });
 ```
 
-Alternative: set `OPENROUTER_API_KEY` and skip `getApiKey`. Alternative env loader: `npm i dotenv` + `import "dotenv/config"` — we prefer `--env-file` (zero deps).
+Alternative env loader: `npm i dotenv` + `import "dotenv/config"` — we prefer `--env-file` (zero deps).
 
 ## getting a model
 
@@ -36,8 +37,8 @@ Alternative: set `OPENROUTER_API_KEY` and skip `getApiKey`. Alternative env load
 
 ```js
 import { getModel } from "@mariozechner/pi-ai";
-const model = getModel("openrouter", "anthropic/claude-sonnet-4.5");
-if (!model) throw new Error(`unknown model: ${process.env.QAGENT_MODEL}`);
+const model = getModel(provider, "anthropic/claude-sonnet-4.5");
+if (!model) throw new Error(`unknown model "${process.env.QAGENT_MODEL}" for provider "${provider}"`);
 ```
 
 Gotcha: unknown id → silent `undefined` → cryptic downstream error. Always assert.
@@ -53,7 +54,7 @@ import { getModel, Type } from "@mariozechner/pi-ai";
 const agent = new Agent({
   initialState: {
     systemPrompt: "Drive the browser to accomplish the goal.",
-    model: getModel("openrouter", process.env.QAGENT_MODEL),
+    model: getModel(provider, process.env.QAGENT_MODEL),
     tools: [clickTool /*, fillTool, navigateTool */],
     // thinkingLevel: "off",   // off | minimal | low | medium | high | xhigh
     // toolExecution: "sequential",  // see gotchas

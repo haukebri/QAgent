@@ -14,7 +14,7 @@ Runs interactively for humans (live progress, ✓/✗ summary) or streams JSON e
 Requirements:
 
 - Node.js 20 or newer.
-- An OpenRouter API key.
+- An API key for an LLM provider (OpenRouter is the default; Anthropic, OpenAI, and Google are also supported with built-in env-var fallbacks).
 - A Playwright Chromium browser install, or a reachable system Chrome.
 
 ```bash
@@ -55,36 +55,39 @@ npx playwright install chromium
 
 If a run fails with a Playwright message like "Executable doesn't exist" or asks you to run `playwright install`, install Chromium with the commands above and retry. If your machine already has Google Chrome installed, QAgent tries that first and falls back to Playwright's bundled Chromium.
 
-## OpenRouter Setup
+## Provider Setup
 
-OpenRouter is currently the only supported LLM provider. QAgent uses one model for browser-driving actions and, by default, the same model as the LLM judge verifier.
+QAgent picks the LLM provider via the `provider` config key (default `openrouter`). The same provider is used for the driver and verifier models. Pi-ai supports many providers; QAgent ships per-provider env-var fallbacks for the four most common.
 
-1. Create an API key at [openrouter.ai/keys](https://openrouter.ai/keys).
-2. Store it once:
+1. Pick your provider and grab an API key:
 
-   ```bash
-   qagent config set apiKey sk-or-...
-   ```
+   - **OpenRouter** (default) — [openrouter.ai/keys](https://openrouter.ai/keys)
+   - **Anthropic** — [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys)
+   - **OpenAI** — [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
+   - **Google (Gemini)** — [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
+   - Other pi-ai providers (Mistral, Groq, xAI, Cerebras, Ollama, …) work too — pass the key via `--api-key`, `QAGENT_API_KEY`, or the `apiKey` config.
 
-3. Pick a model known to the installed `pi-ai` OpenRouter registry:
-
-   ```bash
-   qagent config set model qwen/qwen3.5-flash-02-23
-   ```
-
-4. Optionally use a different verifier model:
+2. Store the provider, model, and key once:
 
    ```bash
-   qagent config set verifierModel qwen/qwen3.5-flash-02-23
+   qagent config set provider anthropic
+   qagent config set model anthropic/claude-sonnet-4.5
+   qagent config set apiKey sk-ant-...
    ```
 
-For CI, prefer env vars over config files:
+3. Optionally use a different verifier model:
+
+   ```bash
+   qagent config set verifierModel anthropic/claude-haiku-4.5
+   ```
+
+For CI, prefer env vars over config files. The provider-specific env vars are picked up automatically:
 
 ```bash
-QAGENT_API_KEY=sk-or-... QAGENT_MODEL=qwen/qwen3.5-flash-02-23 qagent "<goal>"
+QAGENT_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-... QAGENT_MODEL=anthropic/claude-sonnet-4.5 qagent "<goal>"
 ```
 
-`OPENROUTER_API_KEY` is accepted as a fallback for `QAGENT_API_KEY`. If QAgent says `unknown model`, choose a model ID supported by the installed package version.
+`QAGENT_API_KEY` is the provider-agnostic env var and works for any provider. If QAgent says `unknown model "<id>" for provider "<name>"`, check that the provider name and model ID are both valid for the installed `pi-ai` package.
 
 ## Use Cases
 
@@ -190,7 +193,7 @@ Stderr stays clean — only the trace reporter writes its path confirmation ther
 
 ### CI tips
 
-- **Pass the API key via env var** (`QAGENT_API_KEY` or `OPENROUTER_API_KEY`). Avoid `--api-key sk-or-...` on argv (visible in `ps` and most CI job logs) and avoid `qagent config set apiKey ...` in CI scripts (writes to `~/.config/qagent/config.json` on the runner — leaks across cached or shared workers).
+- **Pass the API key via env var** (`QAGENT_API_KEY`, or the provider-specific fallback for the four most common providers — `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`). Avoid `--api-key <key>` on argv (visible in `ps` and most CI job logs) and avoid `qagent config set apiKey ...` in CI scripts (writes to `~/.config/qagent/config.json` on the runner — leaks across cached or shared workers).
 - **Tune the wall-clock budget.** `--test-timeout` caps the loop in seconds (default 300 = 5 min); the verifier still runs against whatever state the loop left behind, so the run terminates with a real verdict instead of hanging. Wrap with `timeout(1)` only as a belt-and-braces backstop:
 
   ```bash
@@ -205,7 +208,7 @@ Stderr stays clean — only the trace reporter writes its path confirmation ther
 - Two-stage: a **driver LLM** picks the next action; a **judge LLM** verifies the end-state. Browser tools (click, fill, navigate) are deterministic Playwright calls.
 - No spec files yet — one inline goal per invocation.
 - No classes, no folders, no TypeScript. Functions and modules.
-- OpenRouter only for now — select supported OpenRouter model IDs via the `model` config key.
+- Provider abstraction supports any pi-ai provider; the four most common (openrouter, anthropic, openai, google) get per-provider env-var fallbacks and tailored error messages. Other providers work via `QAGENT_API_KEY` or the `apiKey` config.
 
 ## CLI Reference
 
@@ -217,7 +220,7 @@ qagent --help | --version
 Run options:
   --model <id>            LLM model
   --verifier-model <id>   Verifier model (defaults to --model)
-  --api-key <key>         OpenRouter key
+  --api-key <key>         Provider API key
   --max-turns <n>         Turn cap (default 50)
   --test-timeout <s>      Wall-clock loop budget in seconds; verifier still runs after (default 300)
   --network-timeout <s>   Per page.goto + post-action networkidle wait, in seconds (default 30)
@@ -232,7 +235,8 @@ Config subcommands:
   qagent config --help
 
 Environment:
-  QAGENT_API_KEY, OPENROUTER_API_KEY, QAGENT_MODEL
+  QAGENT_PROVIDER, QAGENT_API_KEY, QAGENT_MODEL
+  ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY  (per-provider fallbacks)
   QAGENT_TEST_TIMEOUT, QAGENT_NETWORK_TIMEOUT, QAGENT_ACTION_TIMEOUT  (seconds)
   BASIC_AUTH_USER, BASIC_AUTH_PASS    (per-page httpCredentials)
 

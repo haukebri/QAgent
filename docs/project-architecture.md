@@ -53,7 +53,7 @@ Parse argv, call runner.
 ## dependencies
 
 - `playwright`: browser driver. Used only in browser.js and tools.js.
-- `pi-ai`: OpenRouter model lookup. Used by the CLI/demo.
+- `pi-ai`: model lookup across 21+ providers. Used by the CLI/demo. Selected via the `provider` config key (default `openrouter`).
 - `pi-agent-core`: driver and verifier LLM calls. Used by executor.js and verifier.js.
 
 ## data flow

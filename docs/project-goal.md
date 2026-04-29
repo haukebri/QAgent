@@ -24,7 +24,7 @@ Script drives the browser. A driver LLM picks the next action. A separate verifi
 - open source
 - runs local or in CI
 - small local models eventually. start with a big one, dumb it down later.
-- OpenRouter is the only supported model provider for now.
+- Multiple LLM providers supported via pi-ai (default `openrouter`; Anthropic, OpenAI, Google have per-provider env-var fallbacks). See `docs/providers.md`.
 
 ## why
 

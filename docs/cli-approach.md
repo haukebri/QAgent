@@ -71,7 +71,7 @@ A separate `config` subcommand handles read/write of the user and project config
 **Resolution order** (highest priority first):
 
 1. **CLI flags** — `--model`, `--api-key`, etc.
-2. **Env vars** — `QAGENT_API_KEY`, `OPENROUTER_API_KEY`, `QAGENT_MODEL`
+2. **Env vars** — `QAGENT_PROVIDER`, `QAGENT_API_KEY`, per-provider fallback (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`), `QAGENT_MODEL`
 3. **Project config** — `./qagent.config.json` in cwd (optional)
 4. **User config** — `~/.config/qagent/config.json` (optional, but the typical setup)
 5. **Built-in defaults**
@@ -133,16 +133,16 @@ Walk-up surprises users (loads config from a parent repo). Strict beats clever.
 
 1. `--api-key <key>` flag
 2. `QAGENT_API_KEY` env var
-3. `OPENROUTER_API_KEY` env var
+3. Provider-specific env var (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`) when `provider` matches one of the top four
 4. Project config `apiKey`
 5. User config `apiKey`
 
-**Error UX when nothing is found:**
+**Error UX when nothing is found** (provider-aware; example for `provider=anthropic`):
 
 ```
-qagent: no API key found.
-Run `qagent config set apiKey <key>` or set QAGENT_API_KEY / OPENROUTER_API_KEY.
-See https://openrouter.ai/keys
+qagent: no API key found for provider 'anthropic'.
+Pass --api-key, set QAGENT_API_KEY or ANTHROPIC_API_KEY, or set "apiKey" in qagent.config.json / ~/.config/qagent/config.json.
+See https://console.anthropic.com/settings/keys
 Exit 2.
 ```
 
@@ -200,7 +200,7 @@ Usage:
 Run options:
   --model <id>              LLM model
   --verifier-model <id>     Verifier model (defaults to --model)
-  --api-key <key>           OpenRouter API key (prefer env or user config)
+  --api-key <key>           Provider API key (prefer env or user config)
   --max-turns <n>           Turn cap (default 50)
   --test-timeout <s>        Wall-clock loop budget in seconds (default 300)
   --network-timeout <s>     Per page.goto timeout in seconds (default 30)
@@ -217,8 +217,12 @@ Config subcommands:
   qagent config --help
 
 Environment:
-  QAGENT_API_KEY            Preferred env var
-  OPENROUTER_API_KEY        Fallback env var
+  QAGENT_PROVIDER           LLM provider (default openrouter)
+  QAGENT_API_KEY            Preferred env var (any provider)
+  OPENROUTER_API_KEY        Per-provider fallback when provider=openrouter
+  ANTHROPIC_API_KEY         Per-provider fallback when provider=anthropic
+  OPENAI_API_KEY            Per-provider fallback when provider=openai
+  GEMINI_API_KEY            Per-provider fallback when provider=google
   QAGENT_MODEL              Default model if no flag/config
   BASIC_AUTH_USER, BASIC_AUTH_PASS  Per-page httpCredentials (existing behavior)
 
@@ -267,7 +271,7 @@ Answer: not sure what you mean, do what you think is better
 - **Spec files, runner.js, planner.js** — the CLI runs a single inline goal. Spec format and orchestration come later as a separate design.
 - **More subcommands** (`qagent show-report`, `qagent replay`, `qagent serve`) — `config` is enough for v1; add others only when a real need appears.
 - **HTML reporter** — `ndjson` and opt-in `trace` cover the immediate use cases.
-- **Provider abstraction** — OpenRouter only in v1.
+- **Provider abstraction** [done, v1]. `provider` config key, top-4 env-var fallbacks. See `docs/providers.md`.
 - **File-locked auth store** — plain JSON with `0o600` is enough for now.
 - **MCP server mode** — could add `qagent serve --mcp` later.
 - **Config walk-up / merging multiple project configs** — start strict.

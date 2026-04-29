@@ -5,7 +5,8 @@ import { KNOWN_REPORTERS } from './reporters.js';
 const ENV_LOOKUP = {
   model: ['QAGENT_MODEL'],
   verifierModel: [],
-  apiKey: ['QAGENT_API_KEY', 'OPENROUTER_API_KEY'],
+  provider: ['QAGENT_PROVIDER'],
+  apiKey: ['QAGENT_API_KEY'],
   maxTurns: [],
   testTimeout: ['QAGENT_TEST_TIMEOUT'],
   networkTimeout: ['QAGENT_NETWORK_TIMEOUT'],
@@ -26,9 +27,10 @@ const DEFAULTS = {
 };
 
 const KEY_DOCS = {
-  model:          'OpenRouter LLM model id (e.g. qwen/qwen3.5-flash-02-23)',
+  model:          'LLM model id (provider-specific format)',
   verifierModel:  'Verifier model id; defaults to model when unset',
-  apiKey:         'OpenRouter API key (sk-or-...)',
+  provider:       'LLM provider (openrouter, anthropic, openai, google, ...)',
+  apiKey:         'API key for the configured provider',
   maxTurns:       'Positive integer turn cap',
   testTimeout:    'Wall-clock loop budget in seconds; verifier still runs after',
   networkTimeout: 'Per page.goto + post-action networkidle wait, in seconds',
@@ -40,7 +42,8 @@ const KEY_DOCS = {
 
 const ENV_HINTS = {
   model: 'env QAGENT_MODEL',
-  apiKey: 'env QAGENT_API_KEY / OPENROUTER_API_KEY',
+  provider: 'env QAGENT_PROVIDER',
+  apiKey: 'env QAGENT_API_KEY',
   testTimeout: 'env QAGENT_TEST_TIMEOUT',
   networkTimeout: 'env QAGENT_NETWORK_TIMEOUT',
   actionTimeout: 'env QAGENT_ACTION_TIMEOUT',

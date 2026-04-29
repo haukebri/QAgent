@@ -90,6 +90,31 @@ export async function fill(page, ref, value, actionTimeoutMs) {
   await actOrDescribe(locator, 'fill', () => locator.fill(value, { timeout: actionTimeoutMs }));
 }
 
+export async function selectOption(page, ref, value, actionTimeoutMs) {
+  const locator = page.locator(`aria-ref=${ref}`);
+  await actOrDescribe(locator, 'selectOption', () => locator.selectOption(value, { timeout: actionTimeoutMs }));
+}
+
+// Ref-less form sends the keystroke to whatever currently has focus — Playwright
+// routes it through the page; modal libraries typically listen at document
+// level so Escape closes them even without an explicit target.
+export async function pressKey(page, ref, key, actionTimeoutMs) {
+  if (ref) {
+    const locator = page.locator(`aria-ref=${ref}`);
+    await actOrDescribe(locator, 'pressKey', () => locator.press(key, { timeout: actionTimeoutMs }));
+  } else {
+    await page.keyboard.press(key);
+  }
+}
+
+// pressSequentially appends — it does NOT clear the existing value. Used as a
+// fallback when fill() silently fails on React-controlled / masked inputs,
+// where the field is empty anyway, so the missing clear is fine.
+export async function type(page, ref, value, actionTimeoutMs) {
+  const locator = page.locator(`aria-ref=${ref}`);
+  await actOrDescribe(locator, 'type', () => locator.pressSequentially(value, { timeout: actionTimeoutMs }));
+}
+
 // waitUntil: 'load' (not 'networkidle' — Playwright discourages it; chatty
 // pages with analytics/polling rarely settle). 'load' fires when the doc and
 // its sub-resources are loaded; observe() then does a brief networkidle wait

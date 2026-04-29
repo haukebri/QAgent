@@ -1,22 +1,28 @@
 import { randomUUID } from 'node:crypto';
 import { Agent } from '@mariozechner/pi-agent-core';
-import { observe, click, fill, navigate } from './tools.js';
+import { observe, click, fill, navigate, selectOption, pressKey, type } from './tools.js';
 import { verify } from './verifier.js';
 import { compressAgainstBaseline } from './snapshot-compress.js';
 
 const SNAPSHOT_BEGIN = '<<SNAPSHOT_BEGIN>>';
 const SNAPSHOT_END = '<<SNAPSHOT_END>>';
 const SCRUBBED_SNAPSHOT = '[snapshot omitted; see latest snapshot below]';
+const REF_ACTIONS = new Set(['click', 'fill', 'selectOption', 'type', 'pressKey']);
 
 const SYSTEM_PROMPT =
   'You plan one browser action at a time toward a goal. Respond with a single JSON object and nothing else (no markdown fences, no commentary).\n\n' +
   'Schema:\n' +
-  '  { "action": "navigate" | "click" | "fill" | "wait" | "done" | "fail",\n' +
-  '    "url"?: string, "ref"?: string, "value"?: string, "ms"?: number, "summary"?: string, "reason"?: string }\n\n' +
+  '  { "action": "navigate" | "click" | "fill" | "selectOption" | "pressKey" | "type" | "wait" | "done" | "fail",\n' +
+  '    "url"?: string, "ref"?: string, "value"?: string | string[], "key"?: string, "ms"?: number, "summary"?: string, "reason"?: string }\n\n' +
   'Examples:\n' +
   '  {"action": "navigate", "url": "https://example.com"}\n' +
   '  {"action": "click", "ref": "e6"}\n' +
   '  {"action": "fill", "ref": "e40", "value": "playwright"}\n' +
+  '  {"action": "selectOption", "ref": "e20", "value": "Frau"}\n' +
+  '  {"action": "selectOption", "ref": "e20", "value": ["Red", "Blue"]}\n' +
+  '  {"action": "pressKey", "key": "Enter"}\n' +
+  '  {"action": "pressKey", "ref": "e15", "key": "ArrowDown"}\n' +
+  '  {"action": "type", "ref": "e15", "value": "Springfi"}\n' +
   '  {"action": "wait", "ms": 1500}\n' +
   '  {"action": "done", "summary": "There are 42 projects."}\n' +
   '  {"action": "fail", "reason": "The admin page shows counts only; no user list is rendered."}\n\n' +
@@ -31,7 +37,16 @@ const SYSTEM_PROMPT =
   '`button`, `textbox`, `menuitem`. A `generic [cursor=pointer]` span is often a ' +
   'dropdown / mega-menu trigger that expands inline rather than navigating — if you ' +
   'click one and see "page grew +NNN chars" without a URL change, new menu items ' +
+  'Form submits or other actions might take extra time to complete. use the wait tool to wait for the action to complete.' +
   'appeared in the snapshot; look for them instead of re-clicking the same ref.\n\n' +
+  'Form-tool heuristics: ' +
+  'Use `selectOption` for `combobox` refs whose YAML lists `option` children — these are native `<select>` dropdowns. ' +
+  'Pass the visible option label as `value` (e.g. "Frau"); for `<select multiple>` pass an array of labels. ' +
+  'For ARIA comboboxes (no `option` children visible until expanded), use `click` to open, then `pressKey` ArrowDown / Enter, or `type` then `pressKey` Enter.\n' +
+  'Use `pressKey` for Enter (submit search forms with no visible button), Escape (dismiss modals/cookie banners), Tab (advance focus), ArrowDown / ArrowUp / Enter (navigate ARIA combobox suggestions). ' +
+  'Omit `ref` for a global key press (e.g. Escape to close whatever modal is open). Modifier combos like Control+A are NOT supported.\n' +
+  'Use `type` only when `fill` silently failed (the input still appears empty in the next snapshot after a fill turn). It types character-by-character via real keyboard events for inputs that ignore programmatic value injection. ' +
+  'It does NOT clear the existing value, so do not use it to replace text that is already there.\n\n' +
   `Snapshots in earlier user messages are replaced with "${SCRUBBED_SNAPSHOT}" — only the latest snapshot is current. ` +
   'Always pick refs from the latest snapshot.\n\n' +
   'A user message beginning "Baseline anchor (turn N)." is a pinned reference snapshot kept in full. ' +
@@ -137,7 +152,7 @@ export async function runTodo(
         break;
       }
 
-      if ((action.action === 'click' || action.action === 'fill') && action.ref) {
+      if (REF_ACTIONS.has(action.action) && action.ref) {
         if (!snapshot.includes(`[ref=${action.ref}]`)) {
           lastError = `ref ${action.ref} is not present in the current snapshot; pick a ref from the latest snapshot above`;
           const refMissEntry = { turn: turns, atMs: Date.now() - t0, action, url, error: lastError };
@@ -149,7 +164,7 @@ export async function runTodo(
 
       const entry = { turn: turns, atMs: Date.now() - t0, action };
       if (usage) entry.tokens = stepTokens(usage);
-      if (action.action === 'click' || action.action === 'fill') {
+      if (REF_ACTIONS.has(action.action) && action.ref) {
         const target = labelForRef(snapshot, action.ref);
         if (target) entry.target = target;
       }
@@ -158,6 +173,9 @@ export async function runTodo(
         if (action.action === 'navigate') await navigate(page, action.url, networkTimeoutMs);
         else if (action.action === 'click') await click(page, action.ref, actionTimeoutMs);
         else if (action.action === 'fill') await fill(page, action.ref, action.value, actionTimeoutMs);
+        else if (action.action === 'selectOption') await selectOption(page, action.ref, action.value, actionTimeoutMs);
+        else if (action.action === 'pressKey') await pressKey(page, action.ref, action.key, actionTimeoutMs);
+        else if (action.action === 'type') await type(page, action.ref, action.value, actionTimeoutMs);
         else if (action.action === 'wait') await page.waitForTimeout(action.ms ?? 1000);
         else throw new Error(`unknown action: ${action.action}`);
         entry.ms = Date.now() - tAction;

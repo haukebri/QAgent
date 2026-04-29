@@ -37,6 +37,7 @@ Exit: 0 pass | 1 fail | 2 config error | 3 runtime error`;
 const VALUE_FLAGS = {
   '--model': 'model',
   '--verifier-model': 'verifierModel',
+  '--provider': 'provider',
   '--api-key': 'apiKey',
   '--max-turns': 'maxTurns',
   '--test-timeout': 'testTimeout',
@@ -119,6 +120,13 @@ async function main() {
 
   const { user, project } = loadConfig({ cwd: process.cwd() });
 
+  const provider =
+    flags.provider ??
+    process.env.QAGENT_PROVIDER ??
+    project.provider ??
+    user.provider ??
+    'openrouter';
+
   const modelId = flags.model ?? process.env.QAGENT_MODEL ?? project.model ?? user.model;
   if (!modelId) throw new ConfigError('no model. Pass --model, set QAGENT_MODEL, or set "model" in qagent.config.json / ~/.config/qagent/config.json.');
 
@@ -156,10 +164,10 @@ async function main() {
   const outputDir = flags.outputDir ?? project.outputDir ?? user.outputDir ?? 'results';
   const headed = flags.headed ?? project.headed ?? user.headed ?? false;
 
-  const model = getModel('openrouter', modelId);
-  if (!model) throw new ConfigError(`unknown model: ${modelId}`);
-  const verifierModel = getModel('openrouter', verifierModelId);
-  if (!verifierModel) throw new ConfigError(`unknown verifier model: ${verifierModelId}`);
+  const model = getModel(provider, modelId);
+  if (!model) throw new ConfigError(`unknown model "${modelId}" for provider "${provider}"`);
+  const verifierModel = getModel(provider, verifierModelId);
+  if (!verifierModel) throw new ConfigError(`unknown verifier model "${verifierModelId}" for provider "${provider}"`);
 
   const httpCredentials =
     process.env.BASIC_AUTH_USER && process.env.BASIC_AUTH_PASS

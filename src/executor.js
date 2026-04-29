@@ -129,7 +129,8 @@ export async function runTodo(
         prevCompressionRatio = stats.origBytes > 0 ? stats.compressedBytes / stats.origBytes : 1;
       }
 
-      const { action, usage, parseError, llmError } = await askNextAction({ agent, goal, url, messageSnapshot, isBaselineTurn, baselineTurn: baseline.turn, lastError, snapshotDelta });
+      const recentActions = recentActionsBlock(history, 3);
+      const { action, usage, parseError, llmError } = await askNextAction({ agent, goal, url, messageSnapshot, isBaselineTurn, baselineTurn: baseline.turn, lastError, snapshotDelta, recentActions });
       if (usage) {
         tokens.input += usage.input ?? 0;
         tokens.output += usage.output ?? 0;
@@ -306,11 +307,11 @@ function oneLine(value) {
   return String(value ?? 'unknown error').split('\n')[0];
 }
 
-async function askNextAction({ agent, goal, url, messageSnapshot, isBaselineTurn, baselineTurn, lastError, snapshotDelta }) {
+async function askNextAction({ agent, goal, url, messageSnapshot, isBaselineTurn, baselineTurn, lastError, snapshotDelta, recentActions }) {
   const isFirstTurn = agent.state.messages.length === 0;
   const message = isFirstTurn
     ? buildInitialPrompt({ goal, url, snapshot: messageSnapshot, baselineTurn })
-    : buildFollowUpPrompt({ url, snapshot: messageSnapshot, lastError, snapshotDelta, isBaselineTurn, baselineTurn });
+    : buildFollowUpPrompt({ url, snapshot: messageSnapshot, lastError, snapshotDelta, isBaselineTurn, baselineTurn, recentActions });
   await agent.prompt(message);
   const last = [...agent.state.messages].reverse().find(m => m.role === 'assistant');
   const usage = last?.usage ?? null;
@@ -368,7 +369,7 @@ function buildInitialPrompt({ goal, url, snapshot, baselineTurn }) {
   );
 }
 
-function buildFollowUpPrompt({ url, snapshot, lastError, snapshotDelta, isBaselineTurn, baselineTurn }) {
+function buildFollowUpPrompt({ url, snapshot, lastError, snapshotDelta, isBaselineTurn, baselineTurn, recentActions }) {
   const lines = [];
   if (isBaselineTurn) lines.push(`Baseline anchor (turn ${baselineTurn}).`, '');
   if (lastError) lines.push(`Previous action failed: ${lastError}`);
@@ -380,9 +381,45 @@ function buildFollowUpPrompt({ url, snapshot, lastError, snapshotDelta, isBaseli
   }
   lines.push('');
   lines.push(`${SNAPSHOT_BEGIN}\n${snapshot}\n${SNAPSHOT_END}`);
+  if (recentActions) {
+    lines.push('');
+    lines.push('Recent actions:');
+    lines.push(recentActions);
+  }
   lines.push('');
   lines.push('Next action (JSON only):');
   return lines.join('\n');
+}
+
+function formatRecentAction(e) {
+  const t = `T${e.turn}`;
+  if (!e.action) return e.error ? `${t} ERROR: ${e.error}` : `${t} (no action)`;
+  const verb = e.action.action;
+  const parts = [t, verb];
+  if (verb === 'wait') {
+    parts.push(`${e.action.ms ?? 1000}ms`);
+  } else if (verb === 'pressKey') {
+    if (e.target) parts.push(e.target);
+    if (e.action.key) parts.push(`"${e.action.key}"`);
+  } else if (verb === 'click') {
+    if (e.target) parts.push(e.target);
+  } else if (verb === 'fill' || verb === 'selectOption' || verb === 'type') {
+    if (e.target) parts.push(e.target);
+    parts.push(`= ${JSON.stringify(e.action.value ?? '')}`);
+  } else if (verb === 'done' || verb === 'fail') {
+    const text = e.action.summary ?? e.action.reason ?? '';
+    if (text) parts.push(`: ${text}`);
+  }
+  let line = parts.join(' ');
+  if (e.url) line += ` → ${e.url}`;
+  if (e.error) line += ` ERROR: ${e.error}`;
+  return line;
+}
+
+function recentActionsBlock(history, n) {
+  const recent = history.slice(-n);
+  if (recent.length === 0) return null;
+  return recent.map(formatRecentAction).join('\n');
 }
 
 function scrubOldSnapshots(messages, keepBaselineTurn) {

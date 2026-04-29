@@ -7,6 +7,7 @@ import { launchPage } from './browser.js';
 import { ConfigError, loadConfig } from './config.js';
 import { runConfigCommand } from './config-cmd.js';
 import { runTodo } from './executor.js';
+import { resolveApiKey } from './providers.js';
 import { KNOWN_REPORTERS, selectReporters } from './reporters.js';
 
 const HELP = `Usage:
@@ -130,17 +131,13 @@ async function main() {
   const modelId = flags.model ?? process.env.QAGENT_MODEL ?? project.model ?? user.model;
   if (!modelId) throw new ConfigError('no model. Pass --model, set QAGENT_MODEL, or set "model" in qagent.config.json / ~/.config/qagent/config.json.');
 
-  const apiKey =
-    flags.apiKey ??
-    process.env.QAGENT_API_KEY ??
-    process.env.OPENROUTER_API_KEY ??
-    project.apiKey ??
-    user.apiKey;
-  if (!apiKey) {
-    throw new ConfigError(
-      'no API key found.\nPass --api-key, set QAGENT_API_KEY / OPENROUTER_API_KEY, or set "apiKey" in qagent.config.json / ~/.config/qagent/config.json.\nSee https://openrouter.ai/keys',
-    );
-  }
+  const { apiKey } = resolveApiKey({
+    provider,
+    flags,
+    env: process.env,
+    project,
+    user,
+  });
 
   const verifierModelId =
     flags.verifierModel ?? project.verifierModel ?? user.verifierModel ?? modelId;

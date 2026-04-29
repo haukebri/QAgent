@@ -10,6 +10,7 @@ const PROJECT_CONFIG_NAME = 'qagent.config.json';
 const KNOWN_KEYS = {
   model: { type: 'string' },
   verifierModel: { type: 'string' },
+  provider: { type: 'string' },
   apiKey: { type: 'string' },
   maxTurns: { type: 'number' },
   testTimeout: { type: 'seconds' },

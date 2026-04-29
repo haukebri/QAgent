@@ -97,7 +97,9 @@ export async function selectOption(page, ref, value, actionTimeoutMs) {
 
 // Ref-less form sends the keystroke to whatever currently has focus — Playwright
 // routes it through the page; modal libraries typically listen at document
-// level so Escape closes them even without an explicit target.
+// level so Escape closes them even without an explicit target. Ref-less skips
+// actOrDescribe because there is no locator to introspect for blocker context;
+// the Playwright error from page.keyboard.press surfaces unwrapped to the LLM.
 export async function pressKey(page, ref, key, actionTimeoutMs) {
   if (ref) {
     const locator = page.locator(`aria-ref=${ref}`);

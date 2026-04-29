@@ -37,13 +37,13 @@ const SYSTEM_PROMPT =
   '`button`, `textbox`, `menuitem`. A `generic [cursor=pointer]` span is often a ' +
   'dropdown / mega-menu trigger that expands inline rather than navigating — if you ' +
   'click one and see "page grew +NNN chars" without a URL change, new menu items ' +
-  'Form submits or other actions might take extra time to complete. use the wait tool to wait for the action to complete.' +
   'appeared in the snapshot; look for them instead of re-clicking the same ref.\n\n' +
+  'Form submits or other actions might take extra time to complete. Use the `wait` tool to wait for the action to complete before re-checking.\n\n' +
   'Form-tool heuristics: ' +
   'Use `selectOption` for `combobox` refs whose YAML lists `option` children — these are native `<select>` dropdowns. ' +
   'Pass the visible option label as `value` (e.g. "Frau"); for `<select multiple>` pass an array of labels. ' +
   'For ARIA comboboxes (no `option` children visible until expanded), use `click` to open, then `pressKey` ArrowDown / Enter, or `type` then `pressKey` Enter.\n' +
-  'Use `pressKey` for Enter (submit search forms with no visible button), Escape (dismiss modals/cookie banners), Tab (advance focus), ArrowDown / ArrowUp / Enter (navigate ARIA combobox suggestions). ' +
+  'Use `pressKey` for Enter (submit a form ONLY when no visible submit button is present), Escape (dismiss modals/cookie banners), Tab (advance focus), ArrowDown / ArrowUp / Enter (navigate ARIA combobox suggestions). ' +
   'Omit `ref` for a global key press (e.g. Escape to close whatever modal is open). Modifier combos like Control+A are NOT supported.\n' +
   'Use `type` only when `fill` silently failed (the input still appears empty in the next snapshot after a fill turn). It types character-by-character via real keyboard events for inputs that ignore programmatic value injection. ' +
   'It does NOT clear the existing value, so do not use it to replace text that is already there.\n\n' +

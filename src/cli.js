@@ -17,7 +17,8 @@ const HELP = `Usage:
 Options:
   --model <id>           LLM model (or env QAGENT_MODEL)
   --verifier-model <id>  Verifier model (defaults to --model)
-  --api-key <key>        OpenRouter key (or env QAGENT_API_KEY / OPENROUTER_API_KEY)
+  --provider <name>      LLM provider (default openrouter; or env QAGENT_PROVIDER)
+  --api-key <key>        Provider API key (or env QAGENT_API_KEY / provider-specific env)
   --max-turns <n>        Turn cap (default 50)
   --test-timeout <s>     Wall-clock loop budget in seconds; verifier still runs after (default 300)
   --network-timeout <s>  Per page.goto, in seconds (default 30)
@@ -29,7 +30,8 @@ Options:
   --help, -h             Print this help
 
 Environment:
-  QAGENT_API_KEY, OPENROUTER_API_KEY, QAGENT_MODEL
+  QAGENT_PROVIDER, QAGENT_API_KEY, QAGENT_MODEL
+  ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY  (per-provider fallbacks)
   QAGENT_TEST_TIMEOUT, QAGENT_NETWORK_TIMEOUT, QAGENT_ACTION_TIMEOUT  (seconds)
   BASIC_AUTH_USER, BASIC_AUTH_PASS  (per-page httpCredentials)
 

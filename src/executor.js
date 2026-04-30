@@ -214,6 +214,27 @@ export async function runTodo(
         }
       }
 
+      if (REF_ACTIONS.has(action.action) && action.ref) {
+        const prospectiveSig = `${action.action}|${action.ref}|${url}`;
+        if (warnedSignatures.has(prospectiveSig)) {
+          verdict = {
+            action: 'fail',
+            summary: null,
+            reason: `repeated blocked action after stuck warning: ${prospectiveSig}`,
+          };
+          const stuckEntry = {
+            turn: turns,
+            atMs: Date.now() - t0,
+            action,
+            url,
+            error: `stuck termination: ${prospectiveSig}`,
+          };
+          history.push(stuckEntry);
+          onTurn?.(stuckEntry);
+          break;
+        }
+      }
+
       const entry = { turn: turns, atMs: Date.now() - t0, action };
       if (usage) entry.tokens = stepTokens(usage);
       if (REF_ACTIONS.has(action.action) && action.ref) {

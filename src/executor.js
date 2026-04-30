@@ -212,9 +212,7 @@ export async function runTodo(
           onTurn?.(refMissEntry);
           continue;
         }
-      }
 
-      if (REF_ACTIONS.has(action.action) && action.ref) {
         const prospectiveSig = `${action.action}|${action.ref}|${url}`;
         if (warnedSignatures.has(prospectiveSig)) {
           verdict = {
@@ -229,6 +227,7 @@ export async function runTodo(
             url,
             error: `stuck termination: ${prospectiveSig}`,
           };
+          if (usage) stuckEntry.tokens = stepTokens(usage);
           history.push(stuckEntry);
           onTurn?.(stuckEntry);
           break;

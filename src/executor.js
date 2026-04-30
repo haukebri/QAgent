@@ -328,11 +328,66 @@ async function askNextAction({ agent, goal, url, messageSnapshot, isBaselineTurn
   if (!jsonStr) {
     return { action: null, usage, parseError: `no JSON object in LLM response (got: ${text.slice(0, 200)})` };
   }
+  let parsed;
   try {
-    return { action: JSON.parse(jsonStr), usage };
+    parsed = JSON.parse(jsonStr);
   } catch (err) {
     return { action: null, usage, parseError: `${err.message}; raw: ${jsonStr.slice(0, 200)}` };
   }
+  const normalized = normalizeActionShape(parsed);
+  if (normalized.error) {
+    return { action: null, usage, parseError: normalized.error };
+  }
+  return { action: normalized.action, usage };
+}
+
+const SHORTHAND_KEYS = ['click', 'fill', 'selectOption', 'type', 'pressKey', 'wait', 'navigate'];
+
+function normalizeActionShape(parsed) {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { error: 'response must be a JSON object like {"action":"click","ref":"e184"}' };
+  }
+  if (typeof parsed.action === 'string') return { action: parsed };
+
+  const found = SHORTHAND_KEYS.filter(k => k in parsed);
+  if (found.length === 0) {
+    return { error: 'missing "action". Use {"action":"click","ref":"e184"}, not {"click":"e184"}.' };
+  }
+  if (found.length > 1) {
+    return { error: `ambiguous shorthand: keys [${found.join(', ')}] are all set. Send a single canonical action like {"action":"click","ref":"e184"}.` };
+  }
+
+  const verb = found[0];
+  const value = parsed[verb];
+  const rest = { ...parsed };
+  delete rest[verb];
+
+  if (verb === 'click' || verb === 'fill' || verb === 'selectOption' || verb === 'type') {
+    if (typeof value !== 'string') {
+      return { error: `${verb} shorthand needs a ref string. Use {"action":"${verb}","ref":"e184"${verb === 'click' ? '' : ',"value":"..."'}}.` };
+    }
+    return { action: { action: verb, ref: value, ...rest } };
+  }
+  if (verb === 'pressKey') {
+    if (typeof value !== 'string') {
+      return { error: 'pressKey shorthand needs a string. Use {"action":"pressKey","key":"Enter"} for a global press, or {"action":"pressKey","ref":"e15","key":"Enter"} to target an element.' };
+    }
+    if (typeof rest.key === 'string') return { action: { action: 'pressKey', ref: value, ...rest } };
+    return { action: { action: 'pressKey', key: value, ...rest } };
+  }
+  if (verb === 'wait') {
+    if (typeof value !== 'number') {
+      return { error: 'wait shorthand needs a number of ms. Use {"action":"wait","ms":1500}.' };
+    }
+    return { action: { action: 'wait', ms: value, ...rest } };
+  }
+  if (verb === 'navigate') {
+    if (typeof value !== 'string') {
+      return { error: 'navigate shorthand needs a URL string. Use {"action":"navigate","url":"https://example.com"}.' };
+    }
+    return { action: { action: 'navigate', url: value, ...rest } };
+  }
+  return { error: `unsupported shorthand "${verb}"` };
 }
 
 // Extract the first balanced JSON object from an LLM response. Strips markdown
@@ -393,24 +448,8 @@ function buildFollowUpPrompt({ url, snapshot, lastError, snapshotDelta, isBaseli
 
 function formatRecentAction(e) {
   const t = `T${e.turn}`;
-  if (!e.action) return e.error ? `${t} ERROR: ${e.error}` : `${t} (no action)`;
-  const verb = e.action.action;
-  const parts = [t, verb];
-  if (verb === 'wait') {
-    parts.push(`${e.action.ms ?? 1000}ms`);
-  } else if (verb === 'pressKey') {
-    if (e.target) parts.push(e.target);
-    if (e.action.key) parts.push(`"${e.action.key}"`);
-  } else if (verb === 'click') {
-    if (e.target) parts.push(e.target);
-  } else if (verb === 'fill' || verb === 'selectOption' || verb === 'type') {
-    if (e.target) parts.push(e.target);
-    parts.push(`= ${JSON.stringify(e.action.value ?? '')}`);
-  } else if (verb === 'done' || verb === 'fail') {
-    const text = e.action.summary ?? e.action.reason ?? '';
-    if (text) parts.push(`: ${text}`);
-  }
-  let line = parts.join(' ');
+  if (!e.action) return e.error ? `${t} (no action) ERROR: ${e.error}` : `${t} (no action)`;
+  let line = `${t} ${JSON.stringify(e.action)}`;
   if (e.url) line += ` → ${e.url}`;
   if (e.error) line += ` ERROR: ${e.error}`;
   return line;

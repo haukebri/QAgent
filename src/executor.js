@@ -136,6 +136,32 @@ export async function runTodo(
         prevCompressionRatio = stats.origBytes > 0 ? stats.compressedBytes / stats.origBytes : 1;
       }
 
+      if (pendingRefAction && snapshotDelta != null) {
+        const noProgress =
+          pendingRefAction.urlBefore === pendingRefAction.urlAfter &&
+          Math.abs(snapshotDelta) < STUCK_DELTA_TOLERANCE;
+        recentRefActions.push({ sig: pendingRefAction.sig, noProgress });
+        if (recentRefActions.length > STUCK_WINDOW) recentRefActions.shift();
+
+        const sig = pendingRefAction.sig;
+        if (!warnedSignatures.has(sig)) {
+          let matchCount = 0;
+          for (const r of recentRefActions) {
+            if (r.sig === sig && r.noProgress) matchCount++;
+          }
+          if (matchCount >= STUCK_THRESHOLD) {
+            warnedSignatures.add(sig);
+            lastError =
+              `Stuck: you repeated ${pendingRefAction.actionName} ${pendingRefAction.ref} ` +
+              `${STUCK_THRESHOLD} times with no URL or page-state change. ` +
+              `Do not ${pendingRefAction.actionName} that ref again. ` +
+              `Choose a different control, wait for a specific state, navigate directly if valid, or fail with evidence.`;
+          }
+        }
+
+        pendingRefAction = null;
+      }
+
       const recentActions = recentActionsBlock(history, 3);
       const { action, usage, parseError, llmError } = await askNextAction({ agent, goal, url, messageSnapshot, isBaselineTurn, baselineTurn: baseline.turn, lastError, snapshotDelta, recentActions });
       if (usage) {

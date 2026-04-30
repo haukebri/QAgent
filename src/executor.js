@@ -9,6 +9,10 @@ const SNAPSHOT_END = '<<SNAPSHOT_END>>';
 const SCRUBBED_SNAPSHOT = '[snapshot omitted; see latest snapshot below]';
 const REF_ACTIONS = new Set(['click', 'fill', 'selectOption', 'type', 'pressKey']);
 
+const STUCK_WINDOW = 5;
+const STUCK_THRESHOLD = 3;
+const STUCK_DELTA_TOLERANCE = 200;
+
 const SYSTEM_PROMPT =
   'You plan one browser action at a time toward a goal. Respond with a single JSON object and nothing else (no markdown fences, no commentary).\n\n' +
   'Schema:\n' +
@@ -84,6 +88,9 @@ export async function runTodo(
   let fatalError = null;
   let wallClockExpired = false;
   let finalSnapshot = '';
+  const recentRefActions = [];
+  const warnedSignatures = new Set();
+  let pendingRefAction = null;
 
   let prevSnapshotLen = null;
   let baseline = null;

@@ -221,6 +221,15 @@ export async function runTodo(
         if (action.action === 'navigate') throw err;
         lastError = msg;
       }
+      if (REF_ACTIONS.has(action.action) && action.ref) {
+        pendingRefAction = {
+          sig: `${action.action}|${action.ref}|${url}`,
+          urlBefore: url,
+          urlAfter: entry.url,
+          actionName: action.action,
+          ref: action.ref,
+        };
+      }
     } catch (err) {
       fatalError = err.message.split('\n')[0];
       break;

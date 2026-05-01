@@ -1,5 +1,7 @@
 # Task 03: Gate Driver `done` Before Ending a Run
 
+> **Superseded by [Task 06a](06a-assertion-style-done-gate.md).** The history-guard behavior described below — including the 2-rejection cap-bypass — was replaced by an observation-aware terminal gate that runs an extended settle pass and terminates the run as `fail` (no retry, no cap-bypass) when the guard rejects.
+
 ## Status
 
 Partially implemented. The verifier-based gate was reverted after empirical testing showed it caused harm.

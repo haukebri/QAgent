@@ -3,7 +3,7 @@ import { Agent } from '@mariozechner/pi-agent-core';
 import { observe, click, fill, navigate, selectOption, pressKey, type } from './tools.js';
 import { verify } from './verifier.js';
 import { compressAgainstBaseline } from './snapshot-compress.js';
-import { observeWithSettle, diffSnapshots, compactObservation, formatPreviousActionResult } from './observe-settle.js';
+import { observeWithSettle, observeForVerdict, diffSnapshots, compactObservation, formatPreviousActionResult } from './observe-settle.js';
 
 const SNAPSHOT_BEGIN = '<<SNAPSHOT_BEGIN>>';
 const SNAPSHOT_END = '<<SNAPSHOT_END>>';
@@ -89,7 +89,6 @@ export async function runTodo(
   let fatalError = null;
   let wallClockExpired = false;
   let finalSnapshot = '';
-  let doneRejections = 0;
   const recentRefActions = [];
   const warnedSignatures = new Set();
   let pendingRefAction = null;
@@ -212,26 +211,67 @@ export async function runTodo(
       }
 
       if (action.action === 'done') {
-        if (doneRejections < 2) {
-          const doneProblem = findBlockingPriorError({ history, warnings, turns });
-          if (doneProblem) {
-            doneRejections++;
-            lastError = doneProblem;
-            const rejEntry = { turn: turns, atMs: Date.now() - t0, action, url, error: doneProblem };
-            if (usage) rejEntry.tokens = stepTokens(usage);
-            history.push(rejEntry);
-            onTurn?.(rejEntry);
-            continue;
-          }
-        } else {
-          warnings.push(`done-gate: cap reached (2 rejections) at turn ${turns} — accepting done; end-of-run verifier is authoritative`);
+        // Terminal assertion-style settle: wait for the page to stop changing
+        // before the verifier judges it. Diff against the prior performed
+        // action's snapshot when we have one; otherwise (turn-1 done, or done
+        // after a parse-error/ref-miss with no performed action this run) diff
+        // against the snapshot we just observed at the top of this turn.
+        let terminalObs = null;
+        try {
+          const prevSnap = prev ? prev.snapshot : snapshot;
+          const prevU = prev ? prev.url : url;
+          const settle = await observeForVerdict(page, {
+            previousSnapshot: prevSnap,
+            previousUrl: prevU,
+          });
+          terminalObs = settle;
+          finalSnapshot = settle.snapshot;
+          // Refresh the prior action's history-entry observation with the
+          // post-settle view — that's what the (now observation-aware) guard
+          // inspects on the very next line.
+          if (prev) prev.actionEntry.observation = compactObservation(settle);
+        } catch {
+          // Best-effort. If settle throws, fall back to the pre-settle snapshot
+          // already captured at the top of this turn; the guard runs below
+          // either way.
         }
+
+        const doneProblem = findBlockingPriorError({ history, warnings, turns });
+        if (doneProblem) {
+          // Terminate the run as fail — no retry, no cap-bypass. The verifier
+          // still runs at the end of runTodo against finalSnapshot.
+          verdict = { action: 'fail', summary: null, reason: doneProblem };
+          const rejEntry = {
+            turn: turns,
+            atMs: Date.now() - t0,
+            action,
+            url: page.url(),
+            error: `done-gate rejected: ${doneProblem}`,
+          };
+          if (terminalObs) {
+            rejEntry.observation = { ...compactObservation(terminalObs), terminal: true };
+          }
+          if (usage) rejEntry.tokens = stepTokens(usage);
+          history.push(rejEntry);
+          onTurn?.(rejEntry);
+          break;
+        }
+
+        verdict = { action: 'done', summary: action.summary ?? null, reason: null };
+        const doneEntry = { turn: turns, atMs: Date.now() - t0, action, url: page.url() };
+        if (terminalObs) {
+          doneEntry.observation = { ...compactObservation(terminalObs), terminal: true };
+        }
+        if (usage) doneEntry.tokens = stepTokens(usage);
+        history.push(doneEntry);
+        onTurn?.(doneEntry);
+        break;
       }
 
-      if (action.action === 'done' || action.action === 'fail') {
+      if (action.action === 'fail') {
         verdict = {
-          action: action.action,
-          summary: action.summary ?? null,
+          action: 'fail',
+          summary: null,
           reason: action.reason ?? null,
         };
         const verdictEntry = { turn: turns, atMs: Date.now() - t0, action, url: page.url() };

@@ -164,3 +164,158 @@ export async function observeWithSettle(page, prev, opts = {}) {
     ...diff,
   };
 }
+
+const HISTORY_TEXT_CAP = 20;
+const HISTORY_REF_CAP = 50;
+const PROMPT_TEXT_CAP = 5;
+const PROMPT_TEXT_TRUNC = 80;
+
+const truncate = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
+
+// Strip the heavy fields (raw snapshot, url, fingerprints, full changedSections)
+// and apply per-list caps so a single step's observation can't blow up the
+// result JSON.
+export function compactObservation(obs) {
+  if (!obs) return null;
+  return {
+    settled: obs.settled,
+    settleMs: obs.settleMs,
+    urlChanged: obs.urlChanged,
+    snapshotChanged: obs.snapshotChanged,
+    deltaChars: obs.deltaChars,
+    summaryTier: obs.summaryTier,
+    addedText: obs.addedText.slice(0, HISTORY_TEXT_CAP),
+    removedText: obs.removedText.slice(0, HISTORY_TEXT_CAP),
+    addedRefs: obs.addedRefs.slice(0, HISTORY_REF_CAP),
+    removedRefs: obs.removedRefs.slice(0, HISTORY_REF_CAP),
+    changedSectionsCount: obs.changedSections.length,
+  };
+}
+
+function pickNewHeading(addedText, snapshot) {
+  if (snapshot) {
+    const m = snapshot.match(HEADING_RE);
+    if (m && addedText.includes(m[1])) return m[1];
+  }
+  if (addedText.length > 0) return addedText[0];
+  return null;
+}
+
+// One-line action descriptor for the prompt block.
+// Examples:
+//   "click button 'Submit Inquiry'"
+//   "fill textbox 'Email' with \"hauke@…\""
+//   "navigate https://example.com"
+//   "wait 1500ms"
+//   "pressKey Enter"
+function describeAction(action, target) {
+  switch (action.action) {
+    case 'navigate':
+      return `navigate ${action.url}`;
+    case 'wait':
+      return `wait ${action.ms ?? 1000}ms`;
+    case 'click':
+      return target ? `click ${target}` : `click ref ${action.ref}`;
+    case 'fill': {
+      const v = typeof action.value === 'string' ? truncate(action.value, 40) : action.value;
+      return target ? `fill ${target} with ${JSON.stringify(v)}` : `fill ref ${action.ref}`;
+    }
+    case 'selectOption':
+      return target ? `select ${JSON.stringify(action.value)} in ${target}` : `selectOption ref ${action.ref}`;
+    case 'pressKey':
+      return action.ref ? `pressKey ${action.key} on ${target ?? `ref ${action.ref}`}` : `pressKey ${action.key}`;
+    case 'type': {
+      const v = typeof action.value === 'string' ? truncate(action.value, 40) : action.value;
+      return target ? `type ${JSON.stringify(v)} into ${target}` : `type ref ${action.ref}`;
+    }
+    default:
+      return action.action;
+  }
+}
+
+// Format the "Previous action result" block. `entry` is the executor history
+// entry for the action whose effects `observation` describes. `snapshot` is
+// the post-action snapshot (used to look up a heading line for the large
+// tier). `nextUrl` is the post-action URL. Returns a string (no trailing
+// newline) or null when no block should be emitted.
+export function formatPreviousActionResult(entry, observation, snapshot, nextUrl) {
+  if (!entry || !observation) return null;
+  const desc = describeAction(entry.action, entry.target);
+  const ms = entry.ms ?? 0;
+
+  const lines = [];
+
+  // Wait gets a minimal block — no settle stats line.
+  if (entry.action.action === 'wait') {
+    lines.push(`Previous action: ${desc}.`);
+    appendChangeLines(lines, observation, snapshot, nextUrl);
+    return lines.join('\n');
+  }
+
+  // Header line. Includes ERROR if the action threw, plus settle status.
+  if (entry.error) {
+    lines.push(`Previous action: ${desc} — ERROR: ${entry.error}`);
+    if (observation.urlChanged || observation.snapshotChanged) {
+      lines.push('But the page did change while the action was running:');
+    }
+  } else {
+    const settleNote = observation.settled
+      ? `settled in ${observation.settleMs}ms`
+      : `did NOT settle within ${observation.settleMs}ms — page still mutating`;
+    lines.push(`Previous action: ${desc} (${ms}ms; ${settleNote}).`);
+  }
+
+  appendChangeLines(lines, observation, snapshot, nextUrl);
+  return lines.join('\n');
+}
+
+function appendChangeLines(lines, obs, snapshot, nextUrl) {
+  const urlPart = obs.urlChanged
+    ? `URL changed → ${truncate(urlPath(nextUrl), 80)}`
+    : 'URL unchanged';
+
+  if (obs.summaryTier === 'unchanged') {
+    lines.push(`${urlPart}. Page unchanged — action produced no visible state change.`);
+    return;
+  }
+
+  if (obs.summaryTier === 'small') {
+    const sectionPart =
+      obs.changedSections.length > 0
+        ? `, ${obs.changedSections.length} section${obs.changedSections.length === 1 ? '' : 's'}`
+        : '';
+    const deltaPart = obs.deltaChars >= 0 ? `+${obs.deltaChars}` : `${obs.deltaChars}`;
+    lines.push(`${urlPart}. Page changed (${deltaPart} chars${sectionPart}).`);
+    if (obs.addedText.length > 0) {
+      lines.push(
+        'Added: ' +
+          obs.addedText
+            .slice(0, PROMPT_TEXT_CAP)
+            .map(s => `"${truncate(s, PROMPT_TEXT_TRUNC)}"`)
+            .join(', '),
+      );
+    }
+    if (obs.removedText.length > 0) {
+      lines.push(
+        'Removed: ' +
+          obs.removedText
+            .slice(0, PROMPT_TEXT_CAP)
+            .map(s => `"${truncate(s, PROMPT_TEXT_TRUNC)}"`)
+            .join(', '),
+      );
+    }
+    return;
+  }
+
+  // tier === 'large'
+  lines.push(`${urlPart}. Page largely replaced.`);
+  const heading = pickNewHeading(obs.addedText, snapshot);
+  lines.push(heading ? `New heading: "${truncate(heading, 80)}"` : '(no new heading)');
+  lines.push(
+    `+${obs.addedRefs.length} refs, -${obs.removedRefs.length} refs across ${obs.changedSections.length} section${obs.changedSections.length === 1 ? '' : 's'}.`,
+  );
+}
+
+function urlPath(u) {
+  try { return new URL(u).pathname || '/'; } catch { return u ?? ''; }
+}

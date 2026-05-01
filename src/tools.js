@@ -190,9 +190,10 @@ export async function type(page, ref, value, actionTimeoutMs) {
 
 // waitUntil: 'load' (not 'networkidle' — Playwright discourages it; chatty
 // pages with analytics/polling rarely settle). 'load' fires when the doc and
-// its sub-resources are loaded; observe() then does a brief networkidle wait
-// before snapshotting, which absorbs SPA hydration. Any throw here (timeout,
-// DNS, SSL, bad URL) is fatal — executor.js routes it to fatalError, ending
+// its sub-resources are loaded; the executor's post-action settle loop in
+// observe-settle.js then polls observe() until URL + snapshot fingerprint
+// are stable, which absorbs SPA hydration. Any throw here (timeout, DNS,
+// SSL, bad URL) is fatal — executor.js routes it to fatalError, ending
 // the run with outcome 'error' and exit code 3 (review-followups.md #8).
 export async function navigate(page, url, networkTimeoutMs) {
   await page.goto(url, { waitUntil: 'load', timeout: networkTimeoutMs });

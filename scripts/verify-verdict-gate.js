@@ -2,6 +2,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { launchPage } from '../src/browser.js';
 import { observeForVerdict } from '../src/observe-settle.js';
+import { findBlockingPriorError } from '../src/executor.js';
 
 const FIX_DIR = resolve('scripts/verdict-gate-fixtures');
 const fileUrl = (name) => pathToFileURL(resolve(FIX_DIR, name)).href;
@@ -47,7 +48,7 @@ async function testInstantStable() {
     const elapsed = Date.now() - t0;
     record(
       'instant-stable: gate exits quickly on a stable page',
-      r.settled && elapsed < 2000,
+      r.settled && elapsed < 1000,
       `settled=${r.settled} settleMs=${r.settleMs} elapsed=${elapsed}`,
     );
   });
@@ -89,27 +90,8 @@ async function testNoPriorAction() {
 }
 
 // ---------------- findBlockingPriorError scenarios ----------------
-// The helper is internal to executor.js. We re-implement it inline here to
-// document and lock its contract. If the helper changes, update both
-// definitions in lockstep.
-
-function findBlockingPriorError({ history, warnings, turns }) {
-  for (let i = history.length - 1; i >= 0; i--) {
-    const entry = history[i];
-    if (entry.action?.action === 'done') continue;
-    if (entry.ms == null) continue;
-    if (entry.error) {
-      const obs = entry.observation;
-      const meaningfulChange =
-        obs && (obs.urlChanged || obs.snapshotChanged || (obs.addedText && obs.addedText.length > 0));
-      if (meaningfulChange) return null;
-      warnings.push(`rejected at turn ${turns}: ${entry.error}`);
-      return `Your previous action did not succeed: ${entry.error}. Resolve the failure or fail with a reason.`;
-    }
-    break;
-  }
-  return null;
-}
+// Imported from src/executor.js so the harness asserts against the actual
+// helper, not a copy that might drift.
 
 function testGuardAdmitsErrorWithMeaningfulChange() {
   const history = [{
@@ -208,6 +190,28 @@ function testGuardSkipsRefMiss() {
   );
 }
 
+function testGuardRejectsErroredEntryWithNullObservation() {
+  // Performed action that errored but never got an observation attached
+  // (e.g. settle threw or never ran). The `obs && ...` short-circuit must
+  // treat null/undefined observation as "no meaningful change" → reject.
+  const history = [{
+    turn: 5,
+    action: { action: 'click', ref: 'e10' },
+    target: "button",
+    ms: 2050,
+    url: 'https://example.com/',
+    error: 'locator.click: Timeout 2000ms exceeded',
+    // observation: undefined
+  }];
+  const warnings = [];
+  const result = findBlockingPriorError({ history, warnings, turns: 6 });
+  record(
+    'guard rejects errored entry with no captured observation',
+    typeof result === 'string' && warnings.length === 1,
+    `result=${typeof result} warnings=${warnings.length}`,
+  );
+}
+
 // ---------------- runner ----------------
 
 const all = [
@@ -219,6 +223,7 @@ const all = [
   testGuardRejectsErrorWithNoChange,
   testGuardSkipsParseError,
   testGuardSkipsRefMiss,
+  testGuardRejectsErroredEntryWithNullObservation,
 ];
 
 for (const fn of all) {

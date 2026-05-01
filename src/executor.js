@@ -448,7 +448,7 @@ export async function runTodo(
   };
 }
 
-function findBlockingPriorError({ history, warnings, turns }) {
+export function findBlockingPriorError({ history, warnings, turns }) {
   for (let i = history.length - 1; i >= 0; i--) {
     const entry = history[i];
     if (entry.action?.action === 'done') continue;

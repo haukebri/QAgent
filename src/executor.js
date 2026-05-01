@@ -82,12 +82,14 @@ export async function runTodo(
   const history = [];
   const warnings = [];
   const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 };
+  const judgeModel = verifierModel ?? model;
   let turns = 0;
   let lastError = null;
   let verdict = null;
   let fatalError = null;
   let wallClockExpired = false;
   let finalSnapshot = '';
+  let doneRejections = 0;
   const recentRefActions = [];
   const warnedSignatures = new Set();
   let pendingRefAction = null;
@@ -189,6 +191,25 @@ export async function runTodo(
         history.push(parseEntry);
         onTurn?.(parseEntry);
         continue;
+      }
+
+      if (action.action === 'done') {
+        if (doneRejections < 2) {
+          const doneProblem = await validateDoneCandidate({
+            goal, url, snapshot, action, history, judgeModel, apiKey, tokens, warnings, turns,
+          });
+          if (doneProblem) {
+            doneRejections++;
+            lastError = doneProblem;
+            const rejEntry = { turn: turns, atMs: Date.now() - t0, action, url, error: doneProblem };
+            if (usage) rejEntry.tokens = stepTokens(usage);
+            history.push(rejEntry);
+            onTurn?.(rejEntry);
+            continue;
+          }
+        } else {
+          warnings.push(`done-gate: cap reached (2 rejections) at turn ${turns} — accepting done; end-of-run verifier is authoritative`);
+        }
       }
 
       if (action.action === 'done' || action.action === 'fail') {
@@ -312,7 +333,6 @@ export async function runTodo(
         }
       : { action: 'stuck', summary: null, reason: null }
   );
-  const judgeModel = verifierModel ?? model;
 
   let outcome;
   let evidence;
@@ -340,6 +360,42 @@ export async function runTodo(
     finalUrl, finalSnapshot, failureScreenshot,
     history, warnings,
   };
+}
+
+async function validateDoneCandidate({ goal, url, snapshot, action, history, judgeModel, apiKey, tokens, warnings, turns }) {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const entry = history[i];
+    if (entry.action?.action === 'done') continue;
+    if (entry.error) {
+      warnings.push(`done-gate: rejected by history guard at turn ${turns} — previous action errored: ${entry.error}`);
+      return `Your previous action did not succeed: ${entry.error}. Resolve the failure or fail with a reason.`;
+    }
+    break;
+  }
+
+  const verdict = { action: 'done', summary: action.summary ?? null, reason: action.reason ?? null };
+  let result;
+  try {
+    result = await verify(goal, verdict, history, url, snapshot, judgeModel, apiKey);
+  } catch (err) {
+    const msg = err.message?.split('\n')[0] ?? 'unknown error';
+    warnings.push(`done-gate: verifier call failed at turn ${turns} (${msg}) — accepting done`);
+    return null;
+  }
+
+  if (result.tokens) {
+    tokens.input += result.tokens.input ?? 0;
+    tokens.output += result.tokens.output ?? 0;
+    tokens.totalTokens += result.tokens.totalTokens ?? 0;
+    tokens.cost += result.tokens.cost ?? 0;
+  }
+
+  if (result.outcome === 'fail') {
+    warnings.push(`done-gate: verifier rejected done at turn ${turns} — ${result.evidence}`);
+    return `Verifier rejected done: ${result.evidence}. Continue working or fail with a reason.`;
+  }
+
+  return null;
 }
 
 function stepTokens(usage) {

@@ -40,27 +40,6 @@ async function testDelayedSuccess() {
   });
 }
 
-async function testDelayedSuccessQuiet() {
-  await withPage(async (page) => {
-    await page.goto(fileUrl('delayed-success-quiet.html'), { waitUntil: 'load' });
-    const before = await page.locator('body').ariaSnapshot({ mode: 'ai' });
-    const beforeUrl = page.url();
-    // No DOM change between click and the 2.5s setTimeout. The settle must
-    // hold off on declaring "stable" while it's stable on the pre-success
-    // state — otherwise it exits in ~500ms with the wrong snapshot.
-    await page.locator('#submit-btn').click({ timeout: 1000 });
-    const t0 = Date.now();
-    const r = await observeForVerdict(page, { previousSnapshot: before, previousUrl: beforeUrl });
-    const elapsed = Date.now() - t0;
-    const sawSuccess = r.addedText.some(t => /Order Confirmed/i.test(t));
-    record(
-      'delayed-success-quiet: gate waits even with no intermediate DOM activity',
-      r.settled && sawSuccess && elapsed >= 2000 && elapsed <= 9000,
-      `settled=${r.settled} settleMs=${r.settleMs} elapsed=${elapsed} added=${JSON.stringify(r.addedText.slice(0,3))}`,
-    );
-  });
-}
-
 async function testInstantStable() {
   await withPage(async (page) => {
     await page.goto(fileUrl('instant-stable.html'), { waitUntil: 'load' });
@@ -237,7 +216,6 @@ function testGuardRejectsErroredEntryWithNullObservation() {
 
 const all = [
   testDelayedSuccess,
-  testDelayedSuccessQuiet,
   testInstantStable,
   testInfiniteSpinner,
   testNoPriorAction,

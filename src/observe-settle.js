@@ -124,15 +124,34 @@ export async function observeWithSettle(page, prev, opts = {}) {
   const pollMs = opts.pollMs ?? 150;
   const stableSamples = opts.stableSamples ?? 2;
   const maxSettleMs = opts.maxSettleMs ?? 3000;
+  // requireChange (terminal-settle opt-in): a sample only counts toward the
+  // stability streak when its visible state has departed from the baseline.
+  // "Departed" means a different URL, or at least one quoted accessible name
+  // added/removed relative to previousSnapshot. Pure structural deltas that
+  // produce no text-set change (button [disabled] toggle, focus shift) still
+  // hold the streak at 0 — the loop keeps polling until the page has actually
+  // moved off the LLM-seen state, or maxSettleMs elapses.
+  const requireChange = opts.requireChange ?? false;
   const previousSnapshot = prev?.previousSnapshot ?? null;
   const previousUrl = prev?.previousUrl ?? null;
+  const prevFp = previousSnapshot ? fingerprint(previousSnapshot) : null;
+  const prevTexts = previousSnapshot ? extractQuotedNames(previousSnapshot) : null;
+  const isDeparted = (sample) => {
+    if (!requireChange || prevFp == null) return true;
+    if (sample.url !== previousUrl) return true;
+    if (fingerprint(sample.snapshot) === prevFp) return false;
+    const sampleTexts = extractQuotedNames(sample.snapshot);
+    for (const t of sampleTexts) if (!prevTexts.has(t)) return true;
+    for (const t of prevTexts) if (!sampleTexts.has(t)) return true;
+    return false;
+  };
 
   const t0 = Date.now();
   let initialUrl = '';
   try { initialUrl = page.url(); } catch {}
   let last = await safeObserve(page);
   let settled = false;
-  let matchStreak = last.ok ? 1 : 0;
+  let matchStreak = last.ok && isDeparted(last) ? 1 : 0;
 
   while (true) {
     if (matchStreak >= stableSamples) { settled = true; break; }
@@ -142,14 +161,16 @@ export async function observeWithSettle(page, prev, opts = {}) {
     if (!cur.ok) break;
     if (!last.ok) {
       last = cur;
-      matchStreak = 1;
+      matchStreak = isDeparted(cur) ? 1 : 0;
       continue;
     }
     if (cur.url === last.url && fingerprint(cur.snapshot) === fingerprint(last.snapshot)) {
-      matchStreak += 1;
+      // Inter-sample stable. Grow streak only if departed from baseline;
+      // otherwise we're stable on the LLM-seen state — keep polling.
+      if (isDeparted(cur)) matchStreak += 1;
     } else {
-      matchStreak = 1;
       last = cur;
+      matchStreak = isDeparted(cur) ? 1 : 0;
     }
   }
 
@@ -169,16 +190,18 @@ const VERDICT_DEFAULT_POLL_MS = 250;
 const VERDICT_DEFAULT_STABLE_SAMPLES = 3;
 const VERDICT_DEFAULT_MAX_SETTLE_MS = 10000;
 
-// Extended assertion-style settle for terminal verification. Same loop and
-// diff as observeWithSettle, just with a longer poll, more required stable
-// samples, and a wider max-settle budget. Stable window is recomputed from
-// the last sample whenever URL or normalized snapshot changes (inherited
-// from observeWithSettle).
+// Extended assertion-style settle for terminal verification. Wraps
+// observeWithSettle with a longer poll, more stable samples, and a wider
+// budget — and crucially opts in to requireChange so the gate waits for the
+// page to actually depart from the LLM-seen state before declaring stability.
+// Without that, a static pre-transition state (form still visible while AJAX
+// is in flight) reaches the streak in ~500ms with the wrong snapshot.
 export async function observeForVerdict(page, prev, opts = {}) {
   return observeWithSettle(page, prev, {
     pollMs: opts.pollMs ?? VERDICT_DEFAULT_POLL_MS,
     stableSamples: opts.stableSamples ?? VERDICT_DEFAULT_STABLE_SAMPLES,
     maxSettleMs: opts.maxSettleMs ?? VERDICT_DEFAULT_MAX_SETTLE_MS,
+    requireChange: opts.requireChange ?? true,
   });
 }
 

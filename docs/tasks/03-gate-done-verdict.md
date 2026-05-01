@@ -1,103 +1,51 @@
 # Task 03: Gate Driver `done` Before Ending a Run
 
+## Status
+
+Partially implemented. The verifier-based gate was reverted after empirical testing showed it caused harm.
+
 ## Problem
 
-Some failed runs ended because the driver called `done` even though the final page state clearly did not satisfy the goal.
-
-Examples:
+Some failed runs ended because the driver called `done` even though the final page state clearly did not satisfy the goal. Examples:
 
 - AIDA: driver claimed insurance was reached while still on `/kabine`.
 - Ryanair: driver claimed results were available while the snapshot still showed the search form or a disabled Search button.
 - Gravity Forms: driver claimed submission succeeded while validation errors were still visible.
 
-The verifier catches these as failures, but by then the executor has already stopped. The driver gets no chance to recover from an overconfident `done`.
+The end-of-run verifier catches these as failures, but by then the executor has already stopped, so the driver never gets a chance to recover from an overconfident `done`.
 
-## Goal
+## What was kept
 
-Before accepting `done`, run cheap deterministic checks against the current URL, final snapshot, and recent history. If the checks find obvious contradiction, reject `done` and feed a targeted correction back to the driver.
+A deterministic history-error guard in `src/executor.js` (`findBlockingPriorError`). When the driver returns `done`, it walks `history` backwards, skips earlier rejected `done` entries, and finds the most recent non-`done` step. If that step has an `error` field (tool error, missing ref, JSON parse failure, etc.), the gate rejects `done`, sets `lastError` to a targeted message, appends a rejection entry to `history`, and continues the loop.
 
-## Scope
+A cap of 2 rejections per todo prevents pathological loops; the third `done` attempt is accepted and the end-of-run verifier remains authoritative. Rejections and the cap-reached event are surfaced in `result.warnings[]`.
 
-Add a `validateDoneCandidate` helper in `src/executor.js`.
+This catches the "driver hit a tool error and gave up" pattern at near-zero cost (no extra LLM calls).
 
-The helper should inspect:
+## What was reverted
 
-- Driver `done.summary`.
-- Current URL.
-- Current snapshot.
-- Goal text.
-- Recent actions/errors.
+A second check that called the LLM verifier mid-loop on each `done` candidate, fed the verifier's evidence back to the driver as `lastError`, and let the loop continue.
 
-Reject `done` when obvious blockers are present:
+In testing across 13 runs on the Gravity Forms project-inquiry-form goal (timestamps 2026-05-01T02:52Z onward), the verifier-gate produced no outcome lift over the existing end-of-run verifier and consistently caused harm:
 
-- Visible validation errors: `required`, `field is required`, `There was a problem with your submission`, `Bitte füllen Sie`.
-- Disabled submit/search/continue controls relevant to the goal.
-- Loading or transitional states.
-- Goal asks for results/prices/options, but snapshot still only shows the input form.
-- Goal asks for a specific step/page, but URL or heading is still on an earlier step.
-- Recent actions show repeated errors or no meaningful progress.
+- Run `04-38HCC79` (fail, 44 turns): driver re-navigated to the form URL and re-filled every field from scratch after each rejection. Three identical fill cycles, two extra verifier calls, then cap-bypass.
+- Run `04-16H3978` (fail, 100 turns): rejection at turn 86 burned 14 more turns thrashing on stale refs.
+- Runs `04-39H6098` and `04-40H8E5B` (pass): both passes were re-observation timing artifacts after async form confirmation rendered, not gate-driven recovery. `04-40H8E5B` passed via cap-bypass.
 
-On rejection, set `lastError` to a message such as:
+Root cause: the verifier's evidence is *descriptive* of page state ("form fields still populated"), not *diagnostic* of the failed action. A stateless one-turn driver, told the page state is wrong, redoes the workflow rather than debugging the specific action that didn't take effect. Asking the driver to model the verifier in one turn does not work.
 
-```text
-Cannot accept done: the snapshot still shows "There was a problem with your submission" and "Services Needed: This field is required". Continue fixing the form or fail with evidence.
-```
+The verifier-gate code, the rejection cap-related verifier-token accounting, and the `judgeModel` hoisting were removed.
 
-Then continue the loop instead of ending.
+## Non-goals
 
-## Non-Goals
+- Do not replace the end-of-run verifier — it remains the source of truth for pass/fail.
+- Do not introduce phrase lists, regex patterns, or site-specific heuristics.
+- Do not change the `fail` action path.
 
-- Do not replace the verifier.
-- Do not make final pass/fail decisions with regexes.
-- Do not require the deterministic gate to understand every possible goal.
-- Do not block `done` when there is no obvious contradiction.
+## Acceptance criteria (current)
 
-## Suggested Implementation
-
-In `runTodo`, before this branch accepts terminal actions:
-
-```js
-if (action.action === 'done' || action.action === 'fail') {
-```
-
-Add a special case for `done`:
-
-```js
-if (action.action === 'done') {
-  const doneProblem = validateDoneCandidate({ goal, url, snapshot, action, history, lastError });
-  if (doneProblem) {
-    lastError = doneProblem;
-    history.push({ turn: turns, atMs: Date.now() - t0, action, url, error: doneProblem });
-    onTurn?.(history.at(-1));
-    continue;
-  }
-}
-```
-
-Keep `fail` terminal. If the driver can clearly explain why the goal cannot be completed, it should still be allowed to stop.
-
-## Acceptance Criteria
-
-- `done` is rejected when the snapshot contains visible validation errors.
-- `done` is rejected when the goal asks for results/prices but only a search/input form is visible.
-- `done` is rejected when the goal asks for a later AIDA step but the URL/heading is still on an earlier step.
-- Rejected `done` actions are recorded in history with an explanatory error.
-- Valid `done` actions still end the run normally.
-- The verifier remains the final source of truth for pass/fail.
-
-## Example Failure This Prevents
-
-`results/2026-04-30T07-33HED79.json` ended with:
-
-```text
-The project inquiry form submitted...
-```
-
-But the final snapshot still contained:
-
-```text
-There was a problem with your submission
-Services Needed: This field is required
-```
-
-The executor should reject that `done` and require the driver to resolve the validation error or fail explicitly.
+- A driver `done` immediately after a tool error is rejected by the history guard. The rejection is recorded in `history` and `warnings`, and the loop continues.
+- After two history-guard rejections within a single todo, the next `done` is accepted with a cap-reached warning, and the run terminates normally.
+- A valid `done` (no preceding error) terminates the loop with no extra warnings.
+- The end-of-run verifier still runs on the accepted verdict.
+- `fail` is unchanged.

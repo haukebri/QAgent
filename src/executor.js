@@ -82,7 +82,6 @@ export async function runTodo(
   const history = [];
   const warnings = [];
   const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 };
-  const judgeModel = verifierModel ?? model;
   let turns = 0;
   let lastError = null;
   let verdict = null;
@@ -195,9 +194,7 @@ export async function runTodo(
 
       if (action.action === 'done') {
         if (doneRejections < 2) {
-          const doneProblem = await validateDoneCandidate({
-            goal, url, snapshot, action, history, judgeModel, apiKey, tokens, warnings, turns,
-          });
+          const doneProblem = findBlockingPriorError({ history, warnings, turns });
           if (doneProblem) {
             doneRejections++;
             lastError = doneProblem;
@@ -333,6 +330,7 @@ export async function runTodo(
         }
       : { action: 'stuck', summary: null, reason: null }
   );
+  const judgeModel = verifierModel ?? model;
 
   let outcome;
   let evidence;
@@ -362,7 +360,7 @@ export async function runTodo(
   };
 }
 
-async function validateDoneCandidate({ goal, url, snapshot, action, history, judgeModel, apiKey, tokens, warnings, turns }) {
+function findBlockingPriorError({ history, warnings, turns }) {
   for (let i = history.length - 1; i >= 0; i--) {
     const entry = history[i];
     if (entry.action?.action === 'done') continue;
@@ -372,29 +370,6 @@ async function validateDoneCandidate({ goal, url, snapshot, action, history, jud
     }
     break;
   }
-
-  const verdict = { action: 'done', summary: action.summary ?? null, reason: action.reason ?? null };
-  let result;
-  try {
-    result = await verify(goal, verdict, history, url, snapshot, judgeModel, apiKey);
-  } catch (err) {
-    const msg = err.message?.split('\n')[0] ?? 'unknown error';
-    warnings.push(`done-gate: verifier call failed at turn ${turns} (${msg}) — accepting done`);
-    return null;
-  }
-
-  if (result.tokens) {
-    tokens.input += result.tokens.input ?? 0;
-    tokens.output += result.tokens.output ?? 0;
-    tokens.totalTokens += result.tokens.totalTokens ?? 0;
-    tokens.cost += result.tokens.cost ?? 0;
-  }
-
-  if (result.outcome === 'fail') {
-    warnings.push(`done-gate: verifier rejected done at turn ${turns} — ${result.evidence}`);
-    return `Verifier rejected done: ${result.evidence}. Continue working or fail with a reason.`;
-  }
-
   return null;
 }
 

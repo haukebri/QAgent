@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { sliceSections } from './snapshot-compress.js';
+import { observe } from './tools.js';
 
 // Stable hash of an ariaSnapshot YAML string. Strips refs (Playwright re-numbers
 // them deterministically; identical DOM produces identical numbers, but
@@ -100,5 +101,64 @@ export function diffSnapshots(prev, next, prevUrl, nextUrl) {
     addedRefs,
     removedRefs,
     summaryTier,
+  };
+}
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+async function safeObserve(page) {
+  try {
+    return { snapshot: await observe(page), url: page.url(), ok: true };
+  } catch (err) {
+    return { snapshot: null, url: null, ok: false, err };
+  }
+}
+
+// Repeatedly observe until URL+normalized snapshot are stable for `stableSamples`
+// consecutive samples, or `maxSettleMs` elapses. Returns the latest sample plus
+// the structured diff against `previousSnapshot` / `previousUrl`.
+//
+// Never throws: a Playwright failure inside the loop returns settled=false with
+// whatever sample we last successfully captured.
+export async function observeWithSettle(page, prev, opts = {}) {
+  const pollMs = opts.pollMs ?? 150;
+  const stableSamples = opts.stableSamples ?? 2;
+  const maxSettleMs = opts.maxSettleMs ?? 3000;
+  const previousSnapshot = prev?.previousSnapshot ?? null;
+  const previousUrl = prev?.previousUrl ?? null;
+
+  const t0 = Date.now();
+  let last = await safeObserve(page);
+  let settled = false;
+  let matchStreak = last.ok ? 1 : 0;
+
+  while (true) {
+    if (matchStreak >= stableSamples) { settled = true; break; }
+    if (Date.now() - t0 >= maxSettleMs) break;
+    await sleep(pollMs);
+    const cur = await safeObserve(page);
+    if (!cur.ok) break;
+    if (!last.ok) {
+      last = cur;
+      matchStreak = 1;
+      continue;
+    }
+    if (cur.url === last.url && fingerprint(cur.snapshot) === fingerprint(last.snapshot)) {
+      matchStreak += 1;
+    } else {
+      matchStreak = 1;
+      last = cur;
+    }
+  }
+
+  const snapshot = last.snapshot ?? '';
+  const url = last.url ?? page.url();
+  const diff = diffSnapshots(previousSnapshot, snapshot, previousUrl, url);
+  return {
+    snapshot,
+    url,
+    settled,
+    settleMs: Date.now() - t0,
+    ...diff,
   };
 }

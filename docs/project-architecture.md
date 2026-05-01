@@ -100,8 +100,11 @@ If a site still blocks after that, escalate in this order:
 2. Residential proxy via `chromium.launch({ proxy })`.
 3. CAPTCHA solver (CapSolver, 2captcha) for Cloudflare Turnstile.
 
-Network navigation uses `waitUntil: 'networkidle'` with a bounded timeout
-so SPA route transitions are caught, but heavy sites (ads, analytics,
-polling) can't hang the run forever. Navigate timeouts are non-fatal
-inside the executor loop; any other exception becomes `outcome: 'error'`
-so every run produces a result file.
+Network navigation uses `waitUntil: 'load'` with a bounded timeout
+('networkidle' is discouraged by Playwright — chatty sites with analytics
+or polling rarely settle). SPA route hydration and post-action mutation
+are absorbed by the settle loop in `observe-settle.js`, which polls
+`observe()` until URL + snapshot fingerprint are stable for two consecutive
+samples or 3s elapses. Navigate timeouts are fatal inside the executor
+loop (outcome `error`, exit code 3); any other exception also becomes
+`error` so every run produces a result file.

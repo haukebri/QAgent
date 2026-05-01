@@ -33,7 +33,7 @@ const KEY_DOCS = {
   apiKey:         'API key for the configured provider',
   maxTurns:       'Positive integer turn cap',
   testTimeout:    'Wall-clock loop budget in seconds; verifier still runs after',
-  networkTimeout: 'Per page.goto + post-action networkidle wait, in seconds',
+  networkTimeout: 'Per page.goto, in seconds (post-action settle is internal)',
   actionTimeout:  'Per click/fill in seconds; doubles as blocked-element detector',
   reporter:       `Comma-separated; values: ${KNOWN_REPORTERS.join(', ')}`,
   outputDir:      'Path where the trace reporter writes files',

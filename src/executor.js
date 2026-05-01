@@ -211,19 +211,18 @@ export async function runTodo(
       }
 
       if (action.action === 'done') {
-        // Terminal assertion-style settle: wait for the page to stop changing
-        // before the verifier judges it. Diff against the prior performed
-        // action's snapshot when we have one; otherwise (turn-1 done, or done
-        // after a parse-error/ref-miss with no performed action this run) diff
-        // against the snapshot we just observed at the top of this turn.
+        // Terminal assertion-style settle. Baseline is the snapshot the LLM
+        // saw at the top of THIS turn — `done` is a verdict on that state, so
+        // we wait for the page to depart from it before judging. When prev is
+        // null (turn-1 done, or done after a parse-error/ref-miss with no
+        // performed action this run), pass a null baseline so observeForVerdict
+        // skips the requireChange gate and just confirms inter-sample stability
+        // quickly — there's no prior action to wait on.
         let terminalObs = null;
         try {
-          const prevSnap = prev ? prev.snapshot : snapshot;
-          const prevU = prev ? prev.url : url;
-          const settle = await observeForVerdict(page, {
-            previousSnapshot: prevSnap,
-            previousUrl: prevU,
-          });
+          const settle = await observeForVerdict(page, prev
+            ? { previousSnapshot: snapshot, previousUrl: url }
+            : { previousSnapshot: null, previousUrl: null });
           terminalObs = settle;
           finalSnapshot = settle.snapshot;
           // Refresh the prior action's history-entry observation with the

@@ -9,9 +9,18 @@
   </main>
   <script>
     document.getElementById('submit-btn').addEventListener('click', () => {
+      const btn = document.getElementById('submit-btn');
+      const result = document.getElementById('result');
+      btn.disabled = true;
+      let dots = 0;
+      const ticker = setInterval(() => {
+        dots = (dots + 1) % 4;
+        btn.textContent = 'Submitting' + '.'.repeat(dots);
+      }, 200);
       setTimeout(() => {
-        document.getElementById('result').innerHTML =
-          '<h2>Order Confirmed</h2><p>Thank you for your purchase.</p>';
+        clearInterval(ticker);
+        btn.textContent = 'Submitted';
+        result.innerHTML = '<h2>Order Confirmed</h2><p>Thank you for your purchase.</p>';
       }, 2500);
     });
   </script>

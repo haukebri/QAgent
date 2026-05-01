@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Delayed Success (Quiet)</title></head>
+<body>
+  <main>
+    <h1>Order Form</h1>
+    <button id="submit-btn">Submit</button>
+    <div id="result" aria-live="polite"></div>
+  </main>
+  <script>
+    document.getElementById('submit-btn').addEventListener('click', () => {
+      // Quiet variant: no intermediate state. The DOM stays byte-identical
+      // for 2.5s, then the success message appears. The settle's stability
+      // check sees the pre-success state as already stable.
+      setTimeout(() => {
+        document.getElementById('result').innerHTML =
+          '<h2>Order Confirmed</h2><p>Thank you for your purchase.</p>';
+      }, 2500);
+    });
+  </script>
+</body>
+</html>

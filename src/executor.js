@@ -40,8 +40,9 @@ const SYSTEM_PROMPT =
   'Element heuristics: prefer refs labelled `link` (which show a `- /url: …` line) or ' +
   '`button`, `textbox`, `menuitem`. A `generic [cursor=pointer]` span is often a ' +
   'dropdown / mega-menu trigger that expands inline rather than navigating — if you ' +
-  'click one and see "page grew +NNN chars" without a URL change, new menu items ' +
-  'appeared in the snapshot; look for them instead of re-clicking the same ref.\n\n' +
+  'click one and the next "Previous action" block reports `Page changed` with new entries ' +
+  'in `Added:` and no URL change, those are the new menu items; look for them in the ' +
+  'snapshot below instead of re-clicking the same ref.\n\n' +
   'Form submits or other actions might take extra time to complete. Use the `wait` tool to wait for the action to complete before re-checking.\n\n' +
   'Form-tool heuristics: ' +
   'Use `selectOption` for `combobox` refs whose YAML lists `option` children — these are native `<select>` dropdowns. ' +

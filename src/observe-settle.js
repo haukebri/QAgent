@@ -165,6 +165,23 @@ export async function observeWithSettle(page, prev, opts = {}) {
   };
 }
 
+const VERDICT_DEFAULT_POLL_MS = 250;
+const VERDICT_DEFAULT_STABLE_SAMPLES = 3;
+const VERDICT_DEFAULT_MAX_SETTLE_MS = 10000;
+
+// Extended assertion-style settle for terminal verification. Same loop and
+// diff as observeWithSettle, just with a longer poll, more required stable
+// samples, and a wider max-settle budget. Stable window is recomputed from
+// the last sample whenever URL or normalized snapshot changes (inherited
+// from observeWithSettle).
+export async function observeForVerdict(page, prev, opts = {}) {
+  return observeWithSettle(page, prev, {
+    pollMs: opts.pollMs ?? VERDICT_DEFAULT_POLL_MS,
+    stableSamples: opts.stableSamples ?? VERDICT_DEFAULT_STABLE_SAMPLES,
+    maxSettleMs: opts.maxSettleMs ?? VERDICT_DEFAULT_MAX_SETTLE_MS,
+  });
+}
+
 const HISTORY_TEXT_CAP = 20;
 const HISTORY_REF_CAP = 50;
 const PROMPT_TEXT_CAP = 5;

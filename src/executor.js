@@ -412,7 +412,15 @@ function findBlockingPriorError({ history, warnings, turns }) {
   for (let i = history.length - 1; i >= 0; i--) {
     const entry = history[i];
     if (entry.action?.action === 'done') continue;
+    // Pre-execution rejections (parse-error, ref-miss) carry an `error` but no
+    // `ms` — they describe LLM/validation issues, not page state. Skip them
+    // and look further back for the most recent performed action.
+    if (entry.ms == null) continue;
     if (entry.error) {
+      const obs = entry.observation;
+      const meaningfulChange =
+        obs && (obs.urlChanged || obs.snapshotChanged || (obs.addedText && obs.addedText.length > 0));
+      if (meaningfulChange) return null;
       warnings.push(`done-gate: rejected by history guard at turn ${turns} — previous action errored: ${entry.error}`);
       return `Your previous action did not succeed: ${entry.error}. Resolve the failure or fail with a reason.`;
     }

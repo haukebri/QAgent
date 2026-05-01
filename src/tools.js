@@ -12,14 +12,10 @@
 // executor.js escalates to fatalError, ending the run with outcome 'error'
 // and exit code 3 (review-followups.md #8).
 
-// Brief soft-fail networkidle wait lets SPA route transitions settle before we
-// snapshot. 2s cap is intentional: on chatty pages networkidle never fires; on
-// quiet pages it lands in <1s. Beyond that we snapshot anyway and let the LLM
-// iterate. Internal-only — not user-tunable.
+// One-shot snapshot. The post-action settle loop in observe-settle.js subsumes
+// the previous networkidle wait by polling observe() until URL + normalized
+// snapshot are stable, which is a stricter signal than network state.
 export async function observe(page) {
-  try {
-    await page.waitForLoadState('networkidle', { timeout: 2000 });
-  } catch {}
   return await page.locator('body').ariaSnapshot({ mode: 'ai' });
 }
 

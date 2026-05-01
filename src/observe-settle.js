@@ -128,6 +128,8 @@ export async function observeWithSettle(page, prev, opts = {}) {
   const previousUrl = prev?.previousUrl ?? null;
 
   const t0 = Date.now();
+  let initialUrl = '';
+  try { initialUrl = page.url(); } catch {}
   let last = await safeObserve(page);
   let settled = false;
   let matchStreak = last.ok ? 1 : 0;
@@ -152,7 +154,7 @@ export async function observeWithSettle(page, prev, opts = {}) {
   }
 
   const snapshot = last.snapshot ?? '';
-  const url = last.url ?? page.url();
+  const url = last.url ?? initialUrl;
   const diff = diffSnapshots(previousSnapshot, snapshot, previousUrl, url);
   return {
     snapshot,

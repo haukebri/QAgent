@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Delayed Success</title></head>
+<body>
+  <main>
+    <h1>Order Form</h1>
+    <button id="submit-btn">Submit</button>
+    <div id="result" aria-live="polite"></div>
+  </main>
+  <script>
+    document.getElementById('submit-btn').addEventListener('click', () => {
+      setTimeout(() => {
+        document.getElementById('result').innerHTML =
+          '<h2>Order Confirmed</h2><p>Thank you for your purchase.</p>';
+      }, 2500);
+    });
+  </script>
+</body>
+</html>

@@ -268,12 +268,33 @@ export async function runTodo(
       }
 
       if (action.action === 'fail') {
+        // Same terminal-settle treatment as `done` — but only when there was
+        // a recent mutating action (prev != null). On a turn-1 fail or after
+        // retry-only turns there's nothing to wait for; the LLM is calling
+        // it impossible based on what's already on screen.
+        let terminalObs = null;
+        if (prev) {
+          try {
+            const settle = await observeForVerdict(page, {
+              previousSnapshot: snapshot,
+              previousUrl: url,
+            });
+            terminalObs = settle;
+            finalSnapshot = settle.snapshot;
+            prev.actionEntry.observation = compactObservation(settle);
+          } catch {
+            // Best-effort.
+          }
+        }
         verdict = {
           action: 'fail',
           summary: null,
           reason: action.reason ?? null,
         };
         const verdictEntry = { turn: turns, atMs: Date.now() - t0, action, url: page.url() };
+        if (terminalObs) {
+          verdictEntry.observation = { ...compactObservation(terminalObs), terminal: true };
+        }
         if (usage) verdictEntry.tokens = stepTokens(usage);
         history.push(verdictEntry);
         onTurn?.(verdictEntry);

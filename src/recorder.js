@@ -10,6 +10,16 @@ function transformTokens(t) {
   return { ...t, cost: roundCost(t.cost) };
 }
 
+function transformObservation(o) {
+  if (!o) return o;
+  const out = { ...o };
+  if ('settleMs' in out) {
+    out.settleSec = toSec(out.settleMs);
+    delete out.settleMs;
+  }
+  return out;
+}
+
 function transformStep(s) {
   const out = { ...s };
   if ('atMs' in out) {
@@ -21,6 +31,7 @@ function transformStep(s) {
     delete out.ms;
   }
   if (out.tokens) out.tokens = transformTokens(out.tokens);
+  if (out.observation) out.observation = transformObservation(out.observation);
   return out;
 }
 

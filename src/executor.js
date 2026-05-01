@@ -3,6 +3,7 @@ import { Agent } from '@mariozechner/pi-agent-core';
 import { observe, click, fill, navigate, selectOption, pressKey, type } from './tools.js';
 import { verify } from './verifier.js';
 import { compressAgainstBaseline } from './snapshot-compress.js';
+import { observeWithSettle, diffSnapshots, compactObservation, formatPreviousActionResult } from './observe-settle.js';
 
 const SNAPSHOT_BEGIN = '<<SNAPSHOT_BEGIN>>';
 const SNAPSHOT_END = '<<SNAPSHOT_END>>';
@@ -11,7 +12,6 @@ const REF_ACTIONS = new Set(['click', 'fill', 'selectOption', 'type', 'pressKey'
 
 const STUCK_WINDOW = 5;
 const STUCK_THRESHOLD = 3;
-const STUCK_DELTA_TOLERANCE = 200;
 
 const SYSTEM_PROMPT =
   'You plan one browser action at a time toward a goal. Respond with a single JSON object and nothing else (no markdown fences, no commentary).\n\n' +
@@ -93,7 +93,7 @@ export async function runTodo(
   const warnedSignatures = new Set();
   let pendingRefAction = null;
 
-  let prevSnapshotLen = null;
+  let prev = null;             // { snapshot, url, actionEntry } after a performed action; null on turn 1
   let baseline = null;
   let prevCompressionRatio = null;
 
@@ -104,23 +104,40 @@ export async function runTodo(
     }
     turns++;
     try {
-      const snapshot = await observe(page);
-      let snapshotDelta = null;
-      if (prevSnapshotLen !== null && history.length > 0) {
-        const last = history[history.length - 1];
-        if (last.action?.action !== 'wait') {
-          snapshotDelta = snapshot.length - prevSnapshotLen;
+      let snapshot, url, observation;
+      if (prev && prev.actionEntry.observation == null) {
+        if (prev.actionEntry.action.action === 'wait') {
+          snapshot = await observe(page);
+          url = page.url();
+          observation = {
+            settled: true,
+            settleMs: 0,
+            ...diffSnapshots(prev.snapshot, snapshot, prev.url, url),
+          };
+        } else {
+          const settle = await observeWithSettle(page, {
+            previousSnapshot: prev.snapshot,
+            previousUrl: prev.url,
+          });
+          snapshot = settle.snapshot;
+          url = settle.url;
+          observation = settle;
         }
+        prev.actionEntry.observation = compactObservation(observation);
+      } else {
+        // Turn 1, or a retry turn after parse-error / ref-miss / done-rejected
+        // (no new performed action since the last observation).
+        snapshot = await observe(page);
+        url = page.url();
+        observation = null;
       }
-      prevSnapshotLen = snapshot.length;
       finalSnapshot = snapshot;
-      const url = page.url();
 
       const shouldReset = !baseline
         || url !== baseline.url
         || (prevCompressionRatio != null && prevCompressionRatio > 0.6)
         || turns - baseline.turn >= 6
-        || (lastError && snapshotDelta != null && snapshotDelta > 500);
+        || (lastError && observation && observation.deltaChars > 500);
 
       let messageSnapshot;
       let isBaselineTurn;
@@ -137,10 +154,8 @@ export async function runTodo(
         prevCompressionRatio = stats.origBytes > 0 ? stats.compressedBytes / stats.origBytes : 1;
       }
 
-      if (pendingRefAction && snapshotDelta != null) {
-        const noProgress =
-          pendingRefAction.urlBefore === pendingRefAction.urlAfter &&
-          Math.abs(snapshotDelta) < STUCK_DELTA_TOLERANCE;
+      if (pendingRefAction && observation) {
+        const noProgress = !observation.urlChanged && !observation.snapshotChanged;
         recentRefActions.push({ sig: pendingRefAction.sig, noProgress });
         if (recentRefActions.length > STUCK_WINDOW) recentRefActions.shift();
 
@@ -164,7 +179,10 @@ export async function runTodo(
       }
 
       const recentActions = recentActionsBlock(history, 3);
-      const { action, usage, parseError, llmError } = await askNextAction({ agent, goal, url, messageSnapshot, isBaselineTurn, baselineTurn: baseline.turn, lastError, snapshotDelta, recentActions });
+      const previousActionResult = observation && history.length > 0
+        ? formatPreviousActionResult(history[history.length - 1], observation, snapshot, url)
+        : null;
+      const { action, usage, parseError, llmError } = await askNextAction({ agent, goal, url, messageSnapshot, isBaselineTurn, baselineTurn: baseline.turn, lastError, previousActionResult, recentActions });
       if (usage) {
         tokens.input += usage.input ?? 0;
         tokens.output += usage.output ?? 0;
@@ -294,9 +312,38 @@ export async function runTodo(
           ref: action.ref,
         };
       }
+      prev = { snapshot, url, actionEntry: entry };
     } catch (err) {
       fatalError = err.message.split('\n')[0];
       break;
+    }
+  }
+
+  // If the loop ended without a follow-up turn (turn cap, wall-clock timeout,
+  // stuck stage-2 termination, fatal error), the last performed action's
+  // observation was never captured. Run one final pass so analysts see what
+  // that action did.
+  if (prev && prev.actionEntry.observation == null) {
+    try {
+      if (prev.actionEntry.action.action === 'wait') {
+        const finalSnap = await observe(page);
+        const finalU = page.url();
+        prev.actionEntry.observation = compactObservation({
+          settled: true,
+          settleMs: 0,
+          ...diffSnapshots(prev.snapshot, finalSnap, prev.url, finalU),
+        });
+        finalSnapshot = finalSnap;
+      } else {
+        const settle = await observeWithSettle(page, {
+          previousSnapshot: prev.snapshot,
+          previousUrl: prev.url,
+        });
+        prev.actionEntry.observation = compactObservation(settle);
+        finalSnapshot = settle.snapshot;
+      }
+    } catch {
+      // Best-effort; do not let a final-observation failure mask a real verdict.
     }
   }
 
@@ -400,11 +447,11 @@ function oneLine(value) {
   return String(value ?? 'unknown error').split('\n')[0];
 }
 
-async function askNextAction({ agent, goal, url, messageSnapshot, isBaselineTurn, baselineTurn, lastError, snapshotDelta, recentActions }) {
+async function askNextAction({ agent, goal, url, messageSnapshot, isBaselineTurn, baselineTurn, lastError, previousActionResult, recentActions }) {
   const isFirstTurn = agent.state.messages.length === 0;
   const message = isFirstTurn
     ? buildInitialPrompt({ goal, url, snapshot: messageSnapshot, baselineTurn })
-    : buildFollowUpPrompt({ url, snapshot: messageSnapshot, lastError, snapshotDelta, isBaselineTurn, baselineTurn, recentActions });
+    : buildFollowUpPrompt({ url, snapshot: messageSnapshot, lastError, previousActionResult, isBaselineTurn, baselineTurn, recentActions });
   await agent.prompt(message);
   const last = [...agent.state.messages].reverse().find(m => m.role === 'assistant');
   const usage = last?.usage ?? null;
@@ -517,16 +564,15 @@ function buildInitialPrompt({ goal, url, snapshot, baselineTurn }) {
   );
 }
 
-function buildFollowUpPrompt({ url, snapshot, lastError, snapshotDelta, isBaselineTurn, baselineTurn, recentActions }) {
+function buildFollowUpPrompt({ url, snapshot, lastError, previousActionResult, isBaselineTurn, baselineTurn, recentActions }) {
   const lines = [];
   if (isBaselineTurn) lines.push(`Baseline anchor (turn ${baselineTurn}).`, '');
+  if (previousActionResult) {
+    lines.push(previousActionResult);
+    lines.push('');
+  }
   if (lastError) lines.push(`Previous action failed: ${lastError}`);
   lines.push(`Current URL: ${url}`);
-  if (typeof snapshotDelta === 'number') {
-    if (snapshotDelta > 200) lines.push(`Page grew +${snapshotDelta} chars (new content appeared).`);
-    else if (snapshotDelta < -200) lines.push(`Page shrunk ${snapshotDelta} chars (content removed).`);
-    else lines.push('Page unchanged.');
-  }
   lines.push('');
   lines.push(`${SNAPSHOT_BEGIN}\n${snapshot}\n${SNAPSHOT_END}`);
   if (recentActions) {

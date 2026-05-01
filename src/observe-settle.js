@@ -317,5 +317,6 @@ function appendChangeLines(lines, obs, snapshot, nextUrl) {
 }
 
 function urlPath(u) {
-  try { return new URL(u).pathname || '/'; } catch { return u ?? ''; }
+  if (!u) return '(unknown)';
+  try { return new URL(u).pathname || '/'; } catch { return u; }
 }

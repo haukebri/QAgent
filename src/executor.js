@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Agent } from '@mariozechner/pi-agent-core';
-import { observe, click, fill, navigate, selectOption, pressKey, type } from './tools.js';
+import { observe, click, fill, selectOption, pressKey, type } from './tools.js';
 import { verify } from './verifier.js';
 import { compressAgainstBaseline } from './snapshot-compress.js';
 import { observeWithSettle, observeForVerdict, diffSnapshots, compactObservation, formatPreviousActionResult } from './observe-settle.js';
@@ -16,10 +16,9 @@ const STUCK_THRESHOLD = 3;
 const SYSTEM_PROMPT =
   'You plan one browser action at a time toward a goal. Respond with a single JSON object and nothing else (no markdown fences, no commentary).\n\n' +
   'Schema:\n' +
-  '  { "action": "navigate" | "click" | "fill" | "selectOption" | "pressKey" | "type" | "wait" | "done" | "fail",\n' +
-  '    "url"?: string, "ref"?: string, "value"?: string | string[], "key"?: string, "ms"?: number, "summary"?: string, "reason"?: string }\n\n' +
+  '  { "action": "click" | "fill" | "selectOption" | "pressKey" | "type" | "wait" | "done" | "fail",\n' +
+  '    "ref"?: string, "value"?: string | string[], "key"?: string, "ms"?: number, "summary"?: string, "reason"?: string }\n\n' +
   'Examples:\n' +
-  '  {"action": "navigate", "url": "https://example.com"}\n' +
   '  {"action": "click", "ref": "e6"}\n' +
   '  {"action": "fill", "ref": "e40", "value": "playwright"}\n' +
   '  {"action": "selectOption", "ref": "e20", "value": "Frau"}\n' +
@@ -33,7 +32,6 @@ const SYSTEM_PROMPT =
   'Use "wait" when the page is in a transitional state (loading spinners, "Signing in..." buttons, disabled submit buttons). ' +
   "NEVER call done if the URL still matches a login page, or if loading indicators/disabled submit buttons are visible. " +
   'Wait first, then re-check.\n\n' +
-  'If the website requires basic auth, include the username and password in the URL as "https://username:password@example.com".\n\n' +
   'Pick "done" when the goal is clearly complete — include a "summary" that answers any question the goal asked for. ' +
   'Pick "fail" when the goal is clearly impossible on this page/app — include a clear "reason". ' +
   "Don't fabricate: if you cannot literally verify what the goal asks for, use \"fail\".\n\n" +
@@ -340,8 +338,7 @@ export async function runTodo(
       const tAction = Date.now();
       try {
         let recoveredVia = null;
-        if (action.action === 'navigate') await navigate(page, action.url, networkTimeoutMs);
-        else if (action.action === 'click') recoveredVia = await click(page, action.ref, actionTimeoutMs);
+        if (action.action === 'click') recoveredVia = await click(page, action.ref, actionTimeoutMs);
         else if (action.action === 'fill') recoveredVia = await fill(page, action.ref, action.value, actionTimeoutMs);
         else if (action.action === 'selectOption') recoveredVia = await selectOption(page, action.ref, action.value, actionTimeoutMs);
         else if (action.action === 'pressKey') recoveredVia = await pressKey(page, action.ref, action.key, actionTimeoutMs);
@@ -361,7 +358,6 @@ export async function runTodo(
         entry.error = msg;
         history.push(entry);
         onTurn?.(entry);
-        if (action.action === 'navigate') throw err;
         lastError = msg;
       }
       if (REF_ACTIONS.has(action.action) && action.ref) {
@@ -550,7 +546,7 @@ async function askNextAction({ agent, goal, url, messageSnapshot, isBaselineTurn
   return { action: normalized.action, usage };
 }
 
-const SHORTHAND_KEYS = ['click', 'fill', 'selectOption', 'type', 'pressKey', 'wait', 'navigate'];
+const SHORTHAND_KEYS = ['click', 'fill', 'selectOption', 'type', 'pressKey', 'wait'];
 
 function normalizeActionShape(parsed) {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -589,12 +585,6 @@ function normalizeActionShape(parsed) {
       return { error: 'wait shorthand needs a number of ms. Use {"action":"wait","ms":1500}.' };
     }
     return { action: { action: 'wait', ms: value, ...rest } };
-  }
-  if (verb === 'navigate') {
-    if (typeof value !== 'string') {
-      return { error: 'navigate shorthand needs a URL string. Use {"action":"navigate","url":"https://example.com"}.' };
-    }
-    return { action: { action: 'navigate', url: value, ...rest } };
   }
   return { error: `unsupported shorthand "${verb}"` };
 }

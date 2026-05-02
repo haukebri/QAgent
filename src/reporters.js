@@ -35,7 +35,6 @@ function fmtMs(ms) {
 function describeAction(a, target) {
   const tgt = target ? `"${target}"` : '';
   switch (a.action) {
-    case 'navigate': return a.url ?? '';
     case 'click': return tgt;
     case 'fill': return tgt ? `${tgt} = ${JSON.stringify(a.value ?? '')}` : `= ${JSON.stringify(a.value ?? '')}`;
     case 'wait': return `${a.ms ?? 1000}ms`;
@@ -66,7 +65,6 @@ function listReporter() {
       if (h.error) {
         process.stdout.write(`       ${c.red}— ${h.error}${c.reset}\n`);
       } else if (
-        actionName !== 'navigate' &&
         actionName !== 'done' &&
         actionName !== 'fail' &&
         h.url &&

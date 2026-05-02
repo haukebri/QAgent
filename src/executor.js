@@ -65,7 +65,6 @@ export async function runTodo(
   verifierModel = null,
   onTurn = null,
   testTimeoutMs = 300_000,
-  networkTimeoutMs = 30_000,
   actionTimeoutMs = 2_000,
 ) {
   const t0 = Date.now();
@@ -169,7 +168,7 @@ export async function runTodo(
               `Stuck: you repeated ${pendingRefAction.actionName} ${pendingRefAction.ref} ` +
               `${STUCK_THRESHOLD} times with no URL or page-state change. ` +
               `Do not ${pendingRefAction.actionName} that ref again. ` +
-              `Choose a different control, wait for a specific state, navigate directly if valid, or fail with evidence.`;
+              `Choose a different control, wait for a specific state, or fail with evidence.`;
           }
         }
 

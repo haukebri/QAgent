@@ -219,7 +219,7 @@ async function main() {
       try {
         result = await runTodo(
           page, goal, model, apiKey, maxTurns, verifierModel, onTurn,
-          testTimeoutSec * 1000, networkTimeoutSec * 1000, actionTimeoutSec * 1000,
+          testTimeoutSec * 1000, actionTimeoutSec * 1000,
         );
       } catch (err) {
         result = buildErrorResult(err, page, tRun);

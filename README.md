@@ -83,7 +83,7 @@ QAgent picks the LLM provider via the `provider` config key (default `openrouter
 For CI, prefer env vars over config files. The provider-specific env vars are picked up automatically:
 
 ```bash
-QAGENT_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-... QAGENT_MODEL=anthropic/claude-sonnet-4.5 qagent "<goal>"
+QAGENT_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-... QAGENT_MODEL=anthropic/claude-sonnet-4.5 qagent --url <url> "<goal>"
 ```
 
 `QAGENT_API_KEY` is the provider-agnostic env var and works for any provider. If QAgent says `unknown model "<id>" for provider "<name>"`, check that the provider name and model ID are both valid for the installed `pi-ai` package.
@@ -92,10 +92,10 @@ QAGENT_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-... QAGENT_MODEL=anthropic/cl
 
 | I want to... | Run |
 |---|---|
-| Run one goal locally | `qagent "<goal>"` |
-| Stream events to an AI agent | `qagent "<goal>" --reporter=ndjson` |
-| Save a JSON trace file | `qagent "<goal>" --reporter=trace` |
-| Watch the browser | `qagent "<goal>" --headed` |
+| Run one goal locally | `qagent --url <url> "<goal>"` |
+| Stream events to an AI agent | `qagent --url <url> "<goal>" --reporter=ndjson` |
+| Save a JSON trace file | `qagent --url <url> "<goal>" --reporter=trace` |
+| Watch the browser | `qagent --url <url> "<goal>" --headed` |
 
 ## Reporters
 
@@ -136,7 +136,7 @@ QAgent is built so a parent agent (Claude Code, CI scripts) can run goals and co
 | 2 | Config or setup error (missing key, bad flag, unknown reporter) |
 | 3 | Runtime error (browser crash, network) |
 
-**`ndjson` event schema** — `qagent "<goal>" --reporter=ndjson` emits one JSON object per line on stdout. Two event types: `turn` (one per LLM-driven action during the run) and `done` (a single final envelope, always last).
+**`ndjson` event schema** — `qagent --url <url> "<goal>" --reporter=ndjson` emits one JSON object per line on stdout. Two event types: `turn` (one per LLM-driven action during the run) and `done` (a single final envelope, always last).
 
 ```jsonc
 // turn event — fields:
@@ -183,9 +183,9 @@ A `done` event is emitted even on `outcome: fail` and `outcome: error` — the e
 Pipe-friendly recipes:
 
 ```bash
-qagent "<goal>" --reporter=ndjson | jq -c .                 # consume the full event stream
-qagent "<goal>" --reporter=ndjson | tail -1 | jq -r .outcome  # just pass / fail / error
-qagent "<goal>" --reporter=ndjson,trace                     # stream + persist trace file
+qagent --url <url> "<goal>" --reporter=ndjson | jq -c .                 # consume the full event stream
+qagent --url <url> "<goal>" --reporter=ndjson | tail -1 | jq -r .outcome  # just pass / fail / error
+qagent --url <url> "<goal>" --reporter=ndjson,trace                     # stream + persist trace file
 ```
 
 Stderr stays clean — only the trace reporter writes its path confirmation there, so piping stdout into `jq` always works.
@@ -196,8 +196,8 @@ Stderr stays clean — only the trace reporter writes its path confirmation ther
 - **Tune the wall-clock budget.** `--test-timeout` caps the loop in seconds (default 300 = 5 min); the verifier still runs against whatever state the loop left behind, so the run terminates with a real verdict instead of hanging. Wrap with `timeout(1)` only as a belt-and-braces backstop:
 
   ```bash
-  qagent "<goal>" --test-timeout=600 --reporter=ndjson
-  timeout 11m qagent "<goal>" --test-timeout=600 --reporter=ndjson   # hard kill if even the verifier hangs
+  qagent --url <url> "<goal>" --test-timeout=600 --reporter=ndjson
+  timeout 11m qagent --url <url> "<goal>" --test-timeout=600 --reporter=ndjson   # hard kill if even the verifier hangs
   ```
 
 - **Browsers don't auto-install.** Run `npx playwright install chromium` once per runner image. On minimal Linux images, run `npx playwright install-deps chromium` first.

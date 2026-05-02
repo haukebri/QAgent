@@ -70,7 +70,7 @@ runner aggregates results
 ## build order
 
 1. `observe.js`: open a page with playwright, dump the a11y tree
-2. `tools.js`: observe (wraps `ariaSnapshot({ mode: 'ai' })`), click, fill, navigate
+2. `tools.js`: observe (wraps `ariaSnapshot({ mode: 'ai' })`), click, fill, navigate (setup-only since the pre-navigate migration)
 3. `browser.js`: chromium launch + stealth defaults, shared by observe.js and demo.js
 4. `executor.js`: hardcoded todo, full loop working end to end
 5. `recorder.js`: trace output

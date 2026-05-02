@@ -212,7 +212,7 @@ Stderr stays clean — only the trace reporter writes its path confirmation ther
 ## CLI Reference
 
 ```
-qagent [options] "<goal>"
+qagent --url <url> [options] "<goal>"
 qagent config <subcommand> [args]
 qagent --help | --version
 
@@ -220,6 +220,7 @@ Run options:
   --url <url>             Start URL (required); embed basic auth as https://user:pass@host
   --model <id>            LLM model
   --verifier-model <id>   Verifier model (defaults to --model)
+  --provider <name>       LLM provider (default openrouter)
   --api-key <key>         Provider API key
   --max-turns <n>         Turn cap (default 50)
   --test-timeout <s>      Wall-clock loop budget in seconds; verifier still runs after (default 300)

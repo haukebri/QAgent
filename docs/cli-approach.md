@@ -193,11 +193,12 @@ The most common agent integration will be Claude Code running `qagent "<goal>" -
 
 ```
 Usage:
-  qagent [options] "<goal>"            Run a goal
-  qagent config <subcommand> [args]    Manage user/project config
+  qagent --url <url> [options] "<goal>"  Run a goal against a URL
+  qagent config <subcommand> [args]      Manage user/project config
   qagent --version | --help
 
 Run options:
+  --url <url>               Start URL (required); embed basic auth as https://user:pass@host
   --model <id>              LLM model
   --verifier-model <id>     Verifier model (defaults to --model)
   --api-key <key>           Provider API key (prefer env or user config)
@@ -217,6 +218,7 @@ Config subcommands:
   qagent config --help
 
 Environment:
+  QAGENT_URL                Start URL (required if not passed via flag/config)
   QAGENT_PROVIDER           LLM provider (default openrouter)
   QAGENT_API_KEY            Preferred env var (any provider)
   OPENROUTER_API_KEY        Per-provider fallback when provider=openrouter
@@ -224,7 +226,6 @@ Environment:
   OPENAI_API_KEY            Per-provider fallback when provider=openai
   GEMINI_API_KEY            Per-provider fallback when provider=google
   QAGENT_MODEL              Default model if no flag/config
-  BASIC_AUTH_USER, BASIC_AUTH_PASS  Per-page httpCredentials (existing behavior)
 
 Resolution order: CLI flag > env > project config > user config > built-in default
 
@@ -235,7 +236,7 @@ Exit codes: 0 pass | 1 fail | 2 config error | 3 runtime error
 
 ## Verification (how we validate the CLI end-to-end)
 
-1. **Smoke (existing flow still works):** with user config set, `qagent "Open google.com and verify the search box exists"` → exit 0, list reporter shows ✓, **no trace file written**.
+1. **Smoke (existing flow still works):** with user config set, `qagent --url https://google.com "Verify the search box exists"` → exit 0, list reporter shows ✓, **no trace file written**.
 2. **User config:** `~/.config/qagent/config.json` with `model` + `apiKey` → fresh shell, no env vars → `qagent "..."` runs cleanly.
 3. **Project override:** drop `qagent.config.json` with a different `model` → that model is used; user config supplies the API key.
 4. **Flag override:** `qagent "..." --model X` overrides both configs.

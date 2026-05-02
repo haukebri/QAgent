@@ -18,8 +18,9 @@ bot-detection escalation ladder below.
 
 Browser surface. Read + write functions that take a playwright page:
 `observe(page)` returns the ai-mode ariaSnapshot YAML (refs baked in as
-`[ref=eN]`); `click`, `fill`, `navigate` resolve refs via
-`page.locator('aria-ref=${ref}')`.
+`[ref=eN]`); `click`, `fill`, `selectOption`, `pressKey`, `type` resolve refs via
+`page.locator('aria-ref=${ref}')`. `navigate(page, url)` is used by `cli.js`
+for the pre-navigate phase; it is no longer exposed as an LLM action.
 
 ### verifier.js
 

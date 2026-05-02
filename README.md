@@ -23,19 +23,18 @@ npx playwright install chromium
 
 qagent config set apiKey sk-or-...
 qagent config set model qwen/qwen3.5-flash-02-23
-qagent "Open https://example.com and verify that the page heading exists"
+qagent --url https://example.com "Verify that the page heading exists"
 ```
 
 Output:
 
 ```
-▶ Open https://example.com and verify that the page heading exists
+▶ Verify that the page heading exists
 
-    1  navigate  https://example.com  2.6s
-    2  done      "The page heading 'Example Domain' exists."  2.4s
+    1  done      "The page heading 'Example Domain' exists."  2.4s
 
 ✓ PASS — The final snapshot confirms the presence of the heading 'Example Domain'.
-2 turns · 5.0s · $0.0001
+1 turn · 2.4s · $0.00005
 ```
 
 ## Browser Install
@@ -122,7 +121,7 @@ qagent config list                # show effective values + their sources
 qagent config --help              # all keys, types, defaults, valid values
 ```
 
-Recognized keys: `model`, `verifierModel`, `apiKey`, `maxTurns`, `testTimeout`, `networkTimeout`, `actionTimeout`, `reporter`, `outputDir`, `headed`.
+Recognized keys: `model`, `verifierModel`, `apiKey`, `url`, `maxTurns`, `testTimeout`, `networkTimeout`, `actionTimeout`, `reporter`, `outputDir`, `headed`.
 
 ## For AI Agents
 
@@ -146,10 +145,10 @@ QAgent is built so a parent agent (Claude Code, CI scripts) can run goals and co
   "turn": 1,                       // number, sequential, starts at 1
   "atMs": 1594,                    // number, ms since run start (cumulative)
   "action": {                      // object, the action emitted by the driver LLM
-    "action": "navigate",          // string, one of: navigate | click | fill | wait | done | fail
-    "url": "https://...",          // string (navigate)
-    "ref": "e6",                   // string (click | fill — snapshot ref)
-    "value": "...",                // string (fill)
+    "action": "click",             // string, one of: click | fill | selectOption | pressKey | type | wait | done | fail
+    "ref": "e6",                   // string (click | fill | selectOption | type | pressKey — snapshot ref)
+    "value": "...",                // string | string[] (fill | selectOption | type)
+    "key": "Enter",                // string (pressKey)
     "ms": 1500,                    // number (wait — requested duration)
     "summary": "...",              // string (done — driver's natural-language verdict)
     "reason": "..."                // string (fail — driver's natural-language reason)
@@ -205,7 +204,7 @@ Stderr stays clean — only the trace reporter writes its path confirmation ther
 
 ## Philosophy
 
-- Two-stage: a **driver LLM** picks the next action; a **judge LLM** verifies the end-state. Browser tools (click, fill, navigate) are deterministic Playwright calls.
+- Two-stage: a **driver LLM** picks the next action; a **judge LLM** verifies the end-state. Browser tools (click, fill, etc.) are deterministic Playwright calls. The start URL is fixed per run via `--url`; cross-page navigation happens as a side effect of clicks.
 - No spec files yet — one inline goal per invocation.
 - No classes, no folders, no TypeScript. Functions and modules.
 - Provider abstraction supports any pi-ai provider; the four most common (openrouter, anthropic, openai, google) get per-provider env-var fallbacks and tailored error messages. Other providers work via `QAGENT_API_KEY` or the `apiKey` config.
@@ -218,6 +217,7 @@ qagent config <subcommand> [args]
 qagent --help | --version
 
 Run options:
+  --url <url>             Start URL (required); embed basic auth as https://user:pass@host
   --model <id>            LLM model
   --verifier-model <id>   Verifier model (defaults to --model)
   --api-key <key>         Provider API key
@@ -235,10 +235,9 @@ Config subcommands:
   qagent config --help
 
 Environment:
-  QAGENT_PROVIDER, QAGENT_API_KEY, QAGENT_MODEL
+  QAGENT_URL, QAGENT_PROVIDER, QAGENT_API_KEY, QAGENT_MODEL
   ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY  (per-provider fallbacks)
   QAGENT_TEST_TIMEOUT, QAGENT_NETWORK_TIMEOUT, QAGENT_ACTION_TIMEOUT  (seconds)
-  BASIC_AUTH_USER, BASIC_AUTH_PASS    (per-page httpCredentials)
 
 Resolution: flag > env > project > user > built-in default
 Exit codes: 0 pass | 1 fail | 2 config error | 3 runtime error

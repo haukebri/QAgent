@@ -7,14 +7,18 @@ import { launchPage } from './browser.js';
 import { ConfigError, loadConfig } from './config.js';
 import { runConfigCommand } from './config-cmd.js';
 import { runTodo } from './executor.js';
+import { navigate } from './tools.js';
 import { resolveApiKey } from './providers.js';
 import { KNOWN_REPORTERS, selectReporters } from './reporters.js';
 
 const HELP = `Usage:
-  qagent [options] "<goal>"             Run a goal
-  qagent config <subcommand> [args]     Manage user/project config (try: qagent config --help)
+  qagent --url <url> [options] "<goal>"  Run a goal against a URL
+  qagent config <subcommand> [args]      Manage user/project config (try: qagent config --help)
 
 Options:
+  --url <url>            Start URL (required). Embed basic auth as https://user:pass@host/path
+                         (creds are stripped before navigation and used as Playwright httpCredentials).
+                         Or set via QAGENT_URL / config "url".
   --model <id>           LLM model (or env QAGENT_MODEL)
   --verifier-model <id>  Verifier model (defaults to --model)
   --provider <name>      LLM provider (default openrouter; or env QAGENT_PROVIDER)
@@ -30,14 +34,14 @@ Options:
   --help, -h             Print this help
 
 Environment:
-  QAGENT_PROVIDER, QAGENT_API_KEY, QAGENT_MODEL
+  QAGENT_URL, QAGENT_PROVIDER, QAGENT_API_KEY, QAGENT_MODEL
   ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY  (per-provider fallbacks)
   QAGENT_TEST_TIMEOUT, QAGENT_NETWORK_TIMEOUT, QAGENT_ACTION_TIMEOUT  (seconds)
-  BASIC_AUTH_USER, BASIC_AUTH_PASS  (per-page httpCredentials)
 
 Exit: 0 pass | 1 fail | 2 config error | 3 runtime error`;
 
 const VALUE_FLAGS = {
+  '--url': 'url',
   '--model': 'model',
   '--verifier-model': 'verifierModel',
   '--provider': 'provider',
@@ -133,6 +137,30 @@ async function main() {
   const modelId = flags.model ?? process.env.QAGENT_MODEL ?? project.model ?? user.model;
   if (!modelId) throw new ConfigError('no model. Pass --model, set QAGENT_MODEL, or set "model" in qagent.config.json / ~/.config/qagent/config.json.');
 
+  const rawUrl =
+    flags.url ??
+    process.env.QAGENT_URL ??
+    project.url ??
+    user.url;
+  if (!rawUrl) {
+    throw new ConfigError('no url. Pass --url, set QAGENT_URL, or set "url" in qagent.config.json / ~/.config/qagent/config.json.');
+  }
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(rawUrl);
+  } catch (err) {
+    throw new ConfigError(`invalid url: ${err.message}`);
+  }
+  const httpCredentials = parsedUrl.username
+    ? {
+        username: decodeURIComponent(parsedUrl.username),
+        password: decodeURIComponent(parsedUrl.password),
+      }
+    : undefined;
+  parsedUrl.username = '';
+  parsedUrl.password = '';
+  const startUrl = parsedUrl.toString();
+
   const { apiKey } = resolveApiKey({
     provider,
     flags,
@@ -168,13 +196,8 @@ async function main() {
   const verifierModel = getModel(provider, verifierModelId);
   if (!verifierModel) throw new ConfigError(`unknown verifier model "${verifierModelId}" for provider "${provider}"`);
 
-  const httpCredentials =
-    process.env.BASIC_AUTH_USER && process.env.BASIC_AUTH_PASS
-      ? { username: process.env.BASIC_AUTH_USER, password: process.env.BASIC_AUTH_PASS }
-      : undefined;
-
   const reporters = selectReporters(reporterNames, { outputDir });
-  const ctx = { goal, modelId, verifierModelId };
+  const ctx = { goal, modelId, verifierModelId, url: startUrl };
   for (const r of reporters) await r.onStart?.(ctx);
   const onTurn = reporters.some((r) => r.onTurn)
     ? (h) => { for (const r of reporters) r.onTurn?.(h); }
@@ -187,12 +210,19 @@ async function main() {
   try {
     ({ browser, page } = await launchPage({ httpCredentials, headed }));
     try {
-      result = await runTodo(
-        page, goal, model, apiKey, maxTurns, verifierModel, onTurn,
-        testTimeoutSec * 1000, networkTimeoutSec * 1000, actionTimeoutSec * 1000,
-      );
+      await navigate(page, startUrl, networkTimeoutSec * 1000);
     } catch (err) {
-      result = buildErrorResult(err, page, tRun);
+      result = buildErrorResult(err, page, tRun, 'pre-navigate failed');
+    }
+    if (!result) {
+      try {
+        result = await runTodo(
+          page, goal, model, apiKey, maxTurns, verifierModel, onTurn,
+          testTimeoutSec * 1000, networkTimeoutSec * 1000, actionTimeoutSec * 1000,
+        );
+      } catch (err) {
+        result = buildErrorResult(err, page, tRun);
+      }
     }
   } catch (err) {
     result = buildErrorResult(err, page, tRun);
@@ -209,10 +239,10 @@ async function main() {
   return 3;
 }
 
-function buildErrorResult(err, page, startedAt) {
+function buildErrorResult(err, page, startedAt, prefix = 'runner crashed') {
   return {
     outcome: 'error',
-    evidence: `runner crashed: ${err.message.split('\n')[0]}`,
+    evidence: `${prefix}: ${err.message.split('\n')[0]}`,
     llmVerdict: null,
     turns: 0,
     elapsedMs: Date.now() - startedAt,

@@ -12,6 +12,7 @@ const KNOWN_KEYS = {
   verifierModel: { type: 'string' },
   provider: { type: 'string' },
   apiKey: { type: 'string' },
+  url: { type: 'string' },
   maxTurns: { type: 'number' },
   testTimeout: { type: 'seconds' },
   networkTimeout: { type: 'seconds' },

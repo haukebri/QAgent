@@ -58,8 +58,8 @@ Built incrementally. Milestones 1 and 2 shipped; rest pending.
 **Choice:** The runner has one mode — positional arg is the goal text:
 
 ```bash
-qagent "User can sign up with email"
-qagent "User can browse ships on aida.de" --headed
+qagent --url https://signup.example.com "User can sign up with email"
+qagent --url https://aida.de "User can browse ships" --headed
 ```
 
 No spec files, no directories of specs, no multi-goal batches in v1. Spec format and the planner come later — this CLI is the thin shell over `runTodo()` that today's `demo.js` already is.
@@ -76,7 +76,7 @@ A separate `config` subcommand handles read/write of the user and project config
 4. **User config** — `~/.config/qagent/config.json` (optional, but the typical setup)
 5. **Built-in defaults**
 
-The user config is the headline feature: install once, set `model` and `apiKey` once, then run `qagent "<goal>"` in any project without further setup.
+The user config is the headline feature: install once, set `model` and `apiKey` once, then run `qagent --url <url> "<goal>"` in any project — only the URL and goal need to be supplied per-invocation.
 
 #### User config: `~/.config/qagent/config.json`
 
@@ -178,12 +178,12 @@ Compose with comma: `--reporter=list,trace`, `--reporter=ndjson`.
   {"event":"done","goal":"...","outcome":"pass","turns":12,"cost":0.04}
   ```
 
-The most common agent integration will be Claude Code running `qagent "<goal>" --reporter=ndjson` and reading stdout turn by turn.
+The most common agent integration will be Claude Code running `qagent --url <url> "<goal>" --reporter=ndjson` and reading stdout turn by turn.
 
 ### 7. Multi-project UX
 
 - `npm i -g @qagent/cli` → `qagent` available everywhere.
-- User runs `qagent config set model <id>` and `qagent config set apiKey <key>` once, then `qagent "<goal>"` works in any project.
+- User runs `qagent config set model <id>` and `qagent config set apiKey <key>` once, then `qagent --url <url> "<goal>"` works in any project.
 - Per-project `qagent.config.json` only when a project genuinely diverges (different model, higher turn cap).
 - No global session/state. Each invocation is independent.
 
@@ -202,6 +202,7 @@ Run options:
   --model <id>              LLM model
   --verifier-model <id>     Verifier model (defaults to --model)
   --api-key <key>           Provider API key (prefer env or user config)
+  --provider <name>         LLM provider (default openrouter)
   --max-turns <n>           Turn cap (default 50)
   --test-timeout <s>        Wall-clock loop budget in seconds (default 300)
   --network-timeout <s>     Per page.goto timeout in seconds (default 30)
@@ -239,9 +240,9 @@ Exit codes: 0 pass | 1 fail | 2 config error | 3 runtime error
 1. **Smoke (existing flow still works):** with user config set, `qagent --url https://google.com "Verify the search box exists"` → exit 0, list reporter shows ✓, **no trace file written**.
 2. **User config:** `~/.config/qagent/config.json` with `model` + `apiKey` → fresh shell, no env vars → `qagent "..."` runs cleanly.
 3. **Project override:** drop `qagent.config.json` with a different `model` → that model is used; user config supplies the API key.
-4. **Flag override:** `qagent "..." --model X` overrides both configs.
-5. **Trace opt-in:** `qagent "..." --reporter=list,trace` → trace JSON appears under `results/`.
-6. **NDJSON for agents:** `qagent "..." --reporter=ndjson | jq -c .` → stream of events, last is `{"event":"done",...}`.
+4. **Flag override:** `qagent --url <url> "..." --model X` overrides both configs.
+5. **Trace opt-in:** `qagent --url <url> "..." --reporter=list,trace` → trace JSON appears under `results/`.
+6. **NDJSON for agents:** `qagent --url <url> "..." --reporter=ndjson | jq -c .` → stream of events, last is `{"event":"done",...}`.
 7. **Missing key UX:** unset env, empty user config → stderr message + exit 2 (not a stack trace).
 8. **Cross-project:** run from `~/proj-a` and `~/proj-b` with no per-project config → both use user config defaults.
 

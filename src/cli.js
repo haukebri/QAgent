@@ -18,7 +18,8 @@ const HELP = `Usage:
 Options:
   --url <url>            Start URL (required). Embed basic auth as https://user:pass@host/path
                          (creds are stripped before navigation and used as Playwright httpCredentials).
-                         Or set via QAGENT_URL / config "url".
+                         Or set via QAGENT_URL / config "url". Avoid storing creds-in-URL in
+                         qagent.config.json — that file is typically git-tracked.
   --model <id>           LLM model (or env QAGENT_MODEL)
   --verifier-model <id>  Verifier model (defaults to --model)
   --provider <name>      LLM provider (default openrouter; or env QAGENT_PROVIDER)

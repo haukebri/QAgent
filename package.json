@@ -1,6 +1,6 @@
 {
   "name": "@qagent/cli",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "AI-driven end-to-end test runner: prose goals, an LLM drives the browser, and an LLM judge verifies the result.",
   "author": "Hauke Brinkmann",
   "license": "MIT",
@@ -23,6 +23,8 @@
     "src/config-cmd.js",
     "src/config.js",
     "src/executor.js",
+    "src/observe-settle.js",
+    "src/providers.js",
     "src/recorder.js",
     "src/reporters.js",
     "src/snapshot-compress.js",

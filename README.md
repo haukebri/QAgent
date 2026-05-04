@@ -88,6 +88,78 @@ QAGENT_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-... QAGENT_MODEL=anthropic/cl
 
 `QAGENT_API_KEY` is the provider-agnostic env var and works for any provider. If QAgent says `unknown model "<id>" for provider "<name>"`, check that the provider name and model ID are both valid for the installed `pi-ai` package.
 
+## Model Recommendations
+
+The driver model picks browser actions; the verifier judges the final state. The driver does the heavy lifting and is the more sensitive of the two.
+
+These are observed minimums on real-world targets — pages with grouped fields, checkbox arrays, dropdowns, and validation that re-renders on submit. Trivial pages (single heading, single form field) work with anything.
+
+| Provider | Model | Status | Est. cost for ~12 step run | Notes |
+|---|---|---|---|---|
+| OpenRouter | `google/gemma-4-26b-a4b-it` | ✅ recommended | ~$0.008 | 5/5 = 100% on a multi-required-field form (~50s wall time). Cheapest passing option observed. Handles grouped fields and checkbox arrays cleanly. |
+| OpenRouter | `qwen/qwen3.5-flash-02-23` | ✅ recommended | ~$0.018 | 4/5 = 80% on the same form (~45s wall time). The one failure was a flaky cookie/privacy overlay blocking the form, not a model error. Driver occasionally emits a `fail` verdict on a successfully submitted page; the verifier overrides correctly. |
+| OpenAI | `gpt-4.1-mini` | ✅ recommended | ~$0.05 | 5/5 = 100% on a multi-required-field form (~30s wall time). Slightly faster wall time than gemma but ~6× the cost. |
+| OpenAI | `gpt-4.1-nano` | ❌ not viable | $0.02–$0.06 (wasted, runs loop until `--max-turns`) | Misses required checkboxes and confuses grouped fields (e.g. `First` vs `Last` name) regardless of prompt. ~0% success on multi-field forms. As verifier it also false-negatives on pages where a success message and a stale validation banner co-exist. |
+
+Cost notes:
+- Costs above are observed on a Gravity Forms multi-required-field test page; expect variation by snapshot size and turn count. Each turn re-sends a compressed accessibility snapshot to the driver, so denser pages cost more per turn.
+- The verifier runs once at the end (or on `done`/`fail`) and is roughly fixed per run.
+- `--max-turns` (default 50) is the hard cap on driver spend; reduce it to bound worst-case cost on flaky models or pages.
+
+Rule of thumb: if the page has more than ~3 required fields, more than one input type, or any group/checkbox-array pattern, do not use a `nano`-class model for the driver.
+
+## Writing Good Goals
+
+A good goal tells the driver **what to do** and tells the verifier **how to know it worked**. The verifier sees only the final page state — if the success signal you describe doesn't actually appear there, the run will be marked FAIL even when the action succeeded.
+
+### The most important hint: a literal success signal
+
+Replace vague end-states ("I will see the result page") with the literal text or visible element that actually appears on success. Many forms render an inline confirmation rather than navigating to a new page; if your goal says "result page" the driver will keep retrying after success and the verifier will see stale errors mixed with the confirmation.
+
+> ✅ `Stop immediately when the text "Thank you for your project inquiry!" appears, even if other elements (including stale error banners) are still visible on the page.`
+>
+> ❌ `End: I will see the 'result' page which tells me that I have sent the form`
+
+### Other patterns that help
+
+- **Field map for complex forms.** List every required field and a value to use, so the driver fills them all before the first submit.
+- **Disambiguate input types when the labels are ambiguous.** "Services Needed" reads like a dropdown but is actually a checkbox group — call that out: `(CHECKBOXES, not dropdown)`.
+- **Name the parts of grouped fields.** Forms with a `Name` group often expose two textboxes labelled `First` and `Last`; small models otherwise dump the full name into the first textbox they see.
+- **Spell out paired-field constraints.** `Enter Email and Confirm Email must contain the same value` prevents the "Your emails do not match" failure mode.
+
+### Full example
+
+This is the prompt that hit 5/5 on a Gravity Forms project-inquiry form with `gpt-4.1-mini`:
+
+```
+Goal: Submit the project inquiry form.
+
+SUCCESS = the page shows the text "Thank you for your project inquiry!".
+Stop immediately when that text appears — even if other elements
+(including stale error banners from earlier submission attempts) are
+still visible on the page.
+
+Field map (every item below is required and must be filled BEFORE the
+first submit):
+- "Name" group has two textboxes labelled "First" and "Last" — fill both.
+- "Email Address" group has "Enter Email" and "Confirm Email" — both
+  must contain admin@example.com (they must match exactly).
+- "Company Name" textbox — any company name.
+- "Project Type" dropdown — pick any non-default option.
+- "Services Needed" — these are CHECKBOXES, not a dropdown. Tick the
+  first one ("Strategy & Consultation").
+- "Project Budget" dropdown — pick any non-default option.
+- "Timeline" dropdown — pick any non-default option.
+- "Project Description" textbox — short sentence about the project.
+
+Strategy:
+1. Fill all required fields above.
+2. Click "Submit Inquiry".
+3. If a validation error appears AND the success text is NOT visible,
+   read the error, fix the named field, click submit again.
+4. Stop the moment "Thank you for your project inquiry!" is visible.
+```
+
 ## Use Cases
 
 | I want to... | Run |

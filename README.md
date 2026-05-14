@@ -1,13 +1,57 @@
 # QAgent
 
+### The better way to let your AI check its own work.
+
+**AI-driven browser QA** — hand it a goal in plain English, get pass/fail with evidence, for a fraction of a cent.
+
 [![npm version](https://img.shields.io/npm/v/@qagent/cli.svg)](https://www.npmjs.com/package/@qagent/cli)
 [![license](https://img.shields.io/npm/l/@qagent/cli.svg)](LICENSE)
 
-AI-driven end-to-end browser test runner. You write a goal in natural language; a driver LLM picks browser actions, Playwright drives the browser, and a separate LLM judge verifies the result.
+![QAgent — driving a real browser via Playwright while two LLMs decide the next action and judge the result](docs/demo/demo-gif.gif)
 
-Runs interactively for humans (live progress, ✓/✗ summary) or streams JSON events for AI agents like Claude Code (`--reporter=ndjson`).
+> **Status:** pre-1.0, experimental. One inline goal per invocation; multi-goal specs and orchestration are not yet built. `--max-turns` (default 50) is the main spending cap.
 
-> **Status:** pre-1.0, experimental. One inline goal per invocation; multi-goal specs and orchestration are not yet built. Cost scales with snapshot size, driver turns, and verifier calls — `--max-turns` (default 50) is currently the main spending knob.
+---
+
+## The QA step between dev and merge.
+
+Your agent just shipped a feature. Before you merge, you want to know it actually works in a browser — that the form submits, the modal opens, the success message appears. Today the options are bad: writing real E2E tests is slow and burns tokens, and the tests your agent generates often skip the frontend and check config instead. Pointing your agent at Playwright MCP or a browser-use agent burns more tokens and hallucinates verdicts. Clicking through it yourself doesn't scale.
+
+QAgent is the quick check in between. You — or your agent — hand it a goal in plain English; it drives a real browser via Playwright, and a separate LLM judges the end state. You get pass/fail with a one-sentence rationale, typically for a fraction of a cent. Stream the result back to your agent (`--reporter=ndjson`) or watch it run in your terminal.
+
+> Like running E2E tests, but as a quick agent step between dev and merge — not a hand-maintained suite.
+
+---
+
+## See it pass. See it fail. Read the reason.
+
+![QAgent run ending in a green PASS verdict — saucedemo login flow, 5 turns, 34.5s, $0.0007](docs/demo/product-shoot-pass.png)
+
+![QAgent run ending in a red FAIL verdict — saucedemo login flow, step 3 failed, 3 turns, 15.2s, $0.0003](docs/demo/product-shoot-fail.png)
+
+Every run ends with a verdict from a separate judge LLM and a one-sentence rationale. The trace shows what the driver actually clicked, filled, and verified — and how many cents the whole run cost. No flaky test infrastructure to maintain, no spec files to update when the UI shifts.
+
+---
+
+## What it isn't.
+
+- **A replacement for your E2E suite.** If you need deterministic, repeatable assertions across hundreds of flows, write proper tests. QAgent runs between commits, not on every PR.
+- **Interactive.** You give it a goal, you get a result. No human in the loop during the run.
+
+---
+
+## What makes it different.
+
+|  |  |
+| --- | --- |
+| 🧠 **Two LLMs, two jobs** | A driver LLM picks browser actions; a separate verifier judges only the final state. Cuts hallucinated verdicts and the "looks done" problem. |
+| 💸 **Cents, not dollars** | Typical run costs ~$0.0005–$0.05 depending on model and turn count. The verifier runs once at the end — roughly fixed per run. |
+| 🤖 **Built for agents** | `--reporter=ndjson` streams structured events per turn plus a final envelope. Stable exit codes (0/1/2/3) — pipeable into `jq`, drop straight into CI. |
+| 🪶 **No spec files** | One inline goal per invocation. Your agent writes the goal, runs the command, reads the verdict. |
+| 🎯 **Real browser, real Playwright** | Drives the actual DOM via ai-mode accessibility snapshots — not a screenshot model guessing where to click. |
+| 🔌 **Any provider** | OpenRouter (default), Anthropic, OpenAI, Gemini — and any other pi-ai-supported provider via env-var fallback. |
+
+---
 
 ## Quick Start
 
@@ -37,6 +81,8 @@ Output:
 1 turn · 2.4s · $0.00005
 ```
 
+---
+
 ## Browser Install
 
 QAgent does not download browsers during `npm install`. Install Chromium once on each machine or CI image:
@@ -53,6 +99,8 @@ npx playwright install chromium
 ```
 
 If a run fails with a Playwright message like "Executable doesn't exist" or asks you to run `playwright install`, install Chromium with the commands above and retry. If your machine already has Google Chrome installed, QAgent tries that first and falls back to Playwright's bundled Chromium.
+
+---
 
 ## Provider Setup
 
@@ -88,6 +136,8 @@ QAGENT_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-... QAGENT_MODEL=anthropic/cl
 
 `QAGENT_API_KEY` is the provider-agnostic env var and works for any provider. If QAgent says `unknown model "<id>" for provider "<name>"`, check that the provider name and model ID are both valid for the installed `pi-ai` package.
 
+---
+
 ## Model Recommendations
 
 The driver model picks browser actions; the verifier judges the final state. The driver does the heavy lifting and is the more sensitive of the two.
@@ -107,6 +157,8 @@ Cost notes:
 - `--max-turns` (default 50) is the hard cap on driver spend; reduce it to bound worst-case cost on flaky models or pages.
 
 Rule of thumb: if the page has more than ~3 required fields, more than one input type, or any group/checkbox-array pattern, do not use a `nano`-class model for the driver.
+
+---
 
 ## Writing Good Goals
 
@@ -160,6 +212,8 @@ Strategy:
 4. Stop the moment "Thank you for your project inquiry!" is visible.
 ```
 
+---
+
 ## Use Cases
 
 | I want to... | Run |
@@ -168,6 +222,8 @@ Strategy:
 | Stream events to an AI agent | `qagent --url <url> "<goal>" --reporter=ndjson` |
 | Save a JSON trace file | `qagent --url <url> "<goal>" --reporter=trace` |
 | Watch the browser | `qagent --url <url> "<goal>" --headed` |
+
+---
 
 ## Reporters
 
@@ -179,6 +235,8 @@ Strategy:
 | `trace` | Writes `results/<YYYY-MM-DDTHH-MM>H<HASH>.json` (path overridable with `--output-dir`); confirmation goes to **stderr** so machine-readable reporters keep stdout clean |
 
 Compose with a comma: `--reporter=list,trace`. Default is `list`.
+
+---
 
 ## Configuration
 
@@ -194,6 +252,8 @@ qagent config --help              # all keys, types, defaults, valid values
 ```
 
 Recognized keys: `model`, `verifierModel`, `apiKey`, `url`, `maxTurns`, `testTimeout`, `networkTimeout`, `actionTimeout`, `reporter`, `outputDir`, `headed`.
+
+---
 
 ## For AI Agents
 
@@ -274,12 +334,7 @@ Stderr stays clean — only the trace reporter writes its path confirmation ther
 
 - **Browsers don't auto-install.** Run `npx playwright install chromium` once per runner image. On minimal Linux images, run `npx playwright install-deps chromium` first.
 
-## Philosophy
-
-- Two-stage: a **driver LLM** picks the next action; a **judge LLM** verifies the end-state. Browser tools (click, fill, etc.) are deterministic Playwright calls. The start URL is fixed per run via `--url`; cross-page navigation happens as a side effect of clicks.
-- No spec files yet — one inline goal per invocation.
-- No classes, no folders, no TypeScript. Functions and modules.
-- Provider abstraction supports any pi-ai provider; the four most common (openrouter, anthropic, openai, google) get per-provider env-var fallbacks and tailored error messages. Other providers work via `QAGENT_API_KEY` or the `apiKey` config.
+---
 
 ## CLI Reference
 
@@ -316,9 +371,13 @@ Resolution: flag > env > project > user > built-in default
 Exit codes: 0 pass | 1 fail | 2 config error | 3 runtime error
 ```
 
+---
+
 ## Issues
 
 Bug reports and feature requests welcome on [GitHub Issues](https://github.com/haukebri/QAgent/issues).
+
+---
 
 ## License
 

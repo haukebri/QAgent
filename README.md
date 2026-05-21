@@ -1,59 +1,69 @@
 # QAgent
 
-### The better way to let your AI check its own work.
+### The verification agent for your coding agent.
 
-**AI-driven browser QA** — hand it a goal in plain English, get pass/fail with evidence, for a fraction of a cent.
+QAgent is a verification layer for Claude Code, Codex, and other agentic dev loops. Hand it one product-level goal, it drives the browser, and returns a clean pass/fail with the evidence your coding agent can actually use.
 
 [![npm version](https://img.shields.io/npm/v/@qagent/cli.svg)](https://www.npmjs.com/package/@qagent/cli)
 [![license](https://img.shields.io/npm/l/@qagent/cli.svg)](LICENSE)
 
-![QAgent — driving a real browser via Playwright while two LLMs decide the next action and judge the result](docs/demo/demo-gif.gif)
+![QAgent driving a real browser via Playwright while a separate verifier LLM judges the end state and returns a structured verdict to the coding agent](docs/demo/demo-gif.gif)
 
 > **Status:** pre-1.0, experimental. One inline goal per invocation; multi-goal specs and orchestration are not yet built. `--max-turns` (default 50) is the main spending cap.
 
 ---
 
-## The QA step between dev and merge.
+## Why not just have the coding agent drive Playwright?
 
-Your agent just shipped a feature. Before you merge, you want to know it actually works in a browser — that the form submits, the modal opens, the success message appears. Today the options are bad: writing real E2E tests is slow and burns tokens, and the tests your agent generates often skip the frontend and check config instead. Pointing your agent at Playwright MCP or a browser-use agent burns more tokens and hallucinates verdicts. Clicking through it yourself doesn't scale.
+You can. It works. It also burns context, slows the loop, and the verification gets flakier the longer the run gets.
 
-QAgent is the quick check in between. You — or your agent — hand it a goal in plain English; it drives a real browser via Playwright, and a separate LLM judges the end state. You get pass/fail with a one-sentence rationale, typically for a fraction of a cent. Stream the result back to your agent (`--reporter=ndjson`) or watch it run in your terminal.
+- **Context bloat.** Every browser turn, DOM dump, and selector retry lands in your coding agent's context. By the time it's done verifying, it's worse at building.
+- **Weaker focus.** The agent is now juggling two jobs — write the feature and QA it. Neither gets your full model.
+- **Flakier verification.** Long agentic runs drift. By turn 30, the agent is guessing selectors, retrying flaky steps, and reporting "looks ok" when it isn't.
 
-> Like running E2E tests, but as a quick agent step between dev and merge — not a hand-maintained suite.
+QAgent runs the browser turns in a separate loop. Your coding agent gets back a short, structured verdict — not a 40-turn transcript.
 
 ---
 
-## See it pass. See it fail. Read the reason.
+## Structured feedback, not just a green check.
 
 ![QAgent run ending in a green PASS verdict — saucedemo login flow, 5 turns, 34.5s, $0.0007](docs/demo/product-shoot-pass.png)
 
 ![QAgent run ending in a red FAIL verdict — saucedemo login flow, step 3 failed, 3 turns, 15.2s, $0.0003](docs/demo/product-shoot-fail.png)
 
-Every run ends with a verdict from a separate judge LLM and a one-sentence rationale. The trace shows what the driver actually clicked, filled, and verified — and how many cents the whole run cost. No flaky test infrastructure to maintain, no spec files to update when the UI shifts.
+Every run returns a verdict your coding agent can act on: the goal it tried, the steps it took, the final URL, and the one-sentence rationale behind the call. A separate verifier LLM judges the end state — so the agent that drove the browser isn't also the one grading its own work. Easy to paste back into Claude Code or Codex so the next turn already knows what to fix. No flaky test infrastructure to maintain, no spec files to update when the UI shifts.
 
 ---
 
-## What it isn't.
+## What QAgent is — and isn't.
 
-- **A replacement for your E2E suite.** If you need deterministic, repeatable assertions across hundreds of flows, write proper tests. QAgent runs between commits, not on every PR.
-- **Interactive.** You give it a goal, you get a result. No human in the loop during the run.
+**QAgent is for**
+
+- Fast goal-based verification during agentic dev
+- One-shot "does this feature work right now" checks
+- Feeding structured results back into Claude Code / Codex
+- Keeping the coding agent's context focused on building
+
+**QAgent is not**
+
+- A Playwright replacement
+- A regression suite
+- A CI gate on every commit
+- A place to write durable, deterministic test specs
+
+Keep Playwright for the long-lived regression coverage. Use QAgent for the inner loop, while you're still building.
 
 ---
 
-## What makes it different.
+## Built for devs in an agentic loop.
 
-|  |  |
-| --- | --- |
-| 🧠 **Two LLMs, two jobs** | A driver LLM picks browser actions; a separate verifier judges only the final state. Cuts hallucinated verdicts and the "looks done" problem. |
-| 💸 **Cents, not dollars** | Typical run costs ~$0.0005–$0.05 depending on model and turn count. The verifier runs once at the end — roughly fixed per run. |
-| 🤖 **Built for agents** | `--reporter=ndjson` streams structured events per turn plus a final envelope. Stable exit codes (0/1/2/3) — pipeable into `jq`, drop straight into CI. |
-| 🪶 **No spec files** | One inline goal per invocation. Your agent writes the goal, runs the command, reads the verdict. |
-| 🎯 **Real browser, real Playwright** | Drives the actual DOM via ai-mode accessibility snapshots — not a screenshot model guessing where to click. |
-| 🔌 **Any provider** | OpenRouter (default), Anthropic, OpenAI, Gemini — and any other pi-ai-supported provider via env-var fallback. |
+You use Claude Code, Codex, Cursor, or a similar agent. You ship a change every few minutes. You don't want to babysit Playwright inside the coding run, and you want a fast, honest answer to "does the thing I just built actually work?" — that's the loop QAgent is built for.
 
 ---
 
 ## Quick Start
+
+You — or your coding agent — install once, then call `qagent` per verification.
 
 Requirements:
 
@@ -162,7 +172,7 @@ Rule of thumb: if the page has more than ~3 required fields, more than one input
 
 ## Writing Good Goals
 
-A good goal tells the driver **what to do** and tells the verifier **how to know it worked**. The verifier sees only the final page state — if the success signal you describe doesn't actually appear there, the run will be marked FAIL even when the action succeeded.
+Whether you or your coding agent writes the goal, the rules are the same. A good goal tells the driver **what to do** and tells the verifier **how to know it worked**. The verifier sees only the final page state — if the success signal you describe doesn't actually appear there, the run will be marked FAIL even when the action succeeded.
 
 ### The most important hint: a literal success signal
 
@@ -255,9 +265,9 @@ Recognized keys: `model`, `verifierModel`, `apiKey`, `url`, `maxTurns`, `testTim
 
 ---
 
-## For AI Agents
+## How your coding agent calls it.
 
-QAgent is built so a parent agent (Claude Code, CI scripts) can run goals and consume results structurally.
+One CLI call. The verdict comes back as a short structured envelope the next agent turn can paste in and act on. Built so a parent agent (Claude Code, Codex, CI scripts) can run goals and consume results structurally.
 
 **Stable exit codes:**
 

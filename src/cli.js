@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getModel } from '@mariozechner/pi-ai';
+import { getModel } from '@earendil-works/pi-ai';
 import { launchPage } from './browser.js';
 import { ConfigError, loadConfig } from './config.js';
 import { runConfigCommand } from './config-cmd.js';
@@ -169,6 +169,7 @@ async function main() {
     project,
     user,
   });
+  const resolveRequestAuth = async () => ({ apiKey });
 
   const verifierModelId =
     flags.verifierModel ?? project.verifierModel ?? user.verifierModel ?? modelId;
@@ -218,7 +219,7 @@ async function main() {
     if (!result) {
       try {
         result = await runTodo(
-          page, goal, model, apiKey, maxTurns, verifierModel, onTurn,
+          page, goal, model, resolveRequestAuth, maxTurns, verifierModel, onTurn,
           testTimeoutSec * 1000, actionTimeoutSec * 1000,
         );
       } catch (err) {

@@ -1,189 +1,107 @@
 # pi-agent usage
 
-Version: `@mariozechner/pi-agent-core@0.70.0` + `@mariozechner/pi-ai@0.70.0`.
+Version: `@earendil-works/pi-agent-core@0.78.0` + `@earendil-works/pi-ai@0.78.0`.
 
-Companion to `docs/playwright-usage.md`. This covers how QAgent uses pi-agent / pi-ai for the LLM loop. Every claim below is verified against `pi-mono@0.70.0` source (`packages/agent/src/{agent,agent-loop,types}.ts`, `packages/ai/src/{env-api-keys,models,types,index}.ts`).
+Companion to `docs/playwright-usage.md`. This covers how QAgent uses pi-agent / pi-ai for model lookup and LLM calls.
 
 ## the key insight
 
-pi-agent runs the full `observe → LLM picks tool → execute → feed result back → repeat` loop for us. We hand it a model, a system prompt, and a list of tools. It hands us events and a final transcript. We keep our own turn cap and our own trace; everything else is the library's job.
+QAgent owns the browser loop. `executor.js` observes the page, asks the driver LLM for one JSON action, runs the local Playwright tool itself, then repeats until done, stuck, or turn cap. `verifier.js` makes a separate one-shot LLM judgment over the final URL, final snapshot, and action history.
+
+`pi-agent-core` is used as the stateful LLM conversation primitive, not as the browser tool-execution loop. We do not register Playwright tools with `Agent`; QAgent keeps browser mutation, settling, stuck detection, and trace payloads in its own modules.
 
 ## install
 
 ```bash
-npm install @mariozechner/pi-agent-core@0.70.0 @mariozechner/pi-ai@0.70.0
+npm install @earendil-works/pi-agent-core@0.78.0 @earendil-works/pi-ai@0.78.0
 ```
 
-Pin to exact `0.70.0` (no caret) in `package.json` — one-maintainer project, weekly releases. No postinstall. Both are ESM, Node >=20. `pi-ai` bundles every provider SDK (Anthropic, OpenAI, Google, Mistral, Bedrock) — install is heavy but transparent.
+Pin to exact `0.78.0` (no caret) in `package.json`. Both packages are ESM and currently require Node >=22.19.0. `pi-ai` bundles every provider SDK, so install is heavier than a single-provider SDK but keeps provider switching simple.
 
-## env and API keys
+## request auth
 
-QAgent passes the resolved API key via the Agent's `getApiKey` hook (which wins over any env var pi-ai might inspect). The provider is selected at the call site through `getModel(provider, modelId)`. See `src/providers.js` for QAgent's resolution map and per-provider env-var fallbacks.
+QAgent resolves standalone CLI credentials once, then passes request auth through a `streamFn` wrapper. Today that auth is `{ apiKey }`; the shape is intentionally `{ apiKey, headers }` so a future Pi package can forward Pi-managed request auth without teaching the executor about Pi.
+
+The provider is selected at the call site through `getModel(provider, modelId)`. See `src/providers.js` for QAgent's standalone resolution map and per-provider env-var fallbacks.
 
 ```js
-// run with: node --env-file=.env src/executor.js
-const provider = "openrouter"; // or "anthropic", "openai", "google", ...
+import { Agent } from "@earendil-works/pi-agent-core";
+import { getModel } from "@earendil-works/pi-ai";
+import { streamWithRequestAuth } from "../src/llm-auth.js";
+
+const provider = "anthropic";
+const model = getModel(provider, "claude-sonnet-4-5");
+const resolveRequestAuth = async () => ({ apiKey: process.env.QAGENT_API_KEY });
+
 const agent = new Agent({
-  initialState: { systemPrompt, model: getModel(provider, process.env.QAGENT_MODEL) },
-  getApiKey: async (_provider) => process.env.QAGENT_API_KEY,
+  initialState: { systemPrompt, model },
+  streamFn: streamWithRequestAuth(resolveRequestAuth),
 });
 ```
 
-Alternative env loader: `npm i dotenv` + `import "dotenv/config"` — we prefer `--env-file` (zero deps).
+For a Pi extension/package wrapper, unwrap `ctx.modelRegistry.getApiKeyAndHeaders(model)` before returning request auth:
+
+```js
+async function resolveRequestAuth(model) {
+  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+  if (!auth.ok) throw new Error(auth.error);
+  return { apiKey: auth.apiKey, headers: auth.headers };
+}
+```
 
 ## getting a model
 
-`getModel(provider, modelId)` is **synchronous** and takes no options. Returns a `Model` object from a static registry, or `undefined` on typo.
+`getModel(provider, modelId)` is synchronous and takes no options. It returns a `Model` object from the static registry, or `undefined` on typo.
 
 ```js
-import { getModel } from "@mariozechner/pi-ai";
-const model = getModel(provider, "anthropic/claude-sonnet-4.5");
-if (!model) throw new Error(`unknown model "${process.env.QAGENT_MODEL}" for provider "${provider}"`);
+import { getModel } from "@earendil-works/pi-ai";
+
+const provider = "anthropic";
+const model = getModel(provider, "claude-sonnet-4-5");
+if (!model) throw new Error(`unknown model "${modelId}" for provider "${provider}"`);
 ```
 
-Gotcha: unknown id → silent `undefined` → cryptic downstream error. Always assert.
+Model IDs are provider-local. OpenRouter IDs often include a slash; direct Anthropic IDs look like `claude-sonnet-4-5`.
 
-## creating an Agent
+## driver agent shape
 
-All `initialState` keys are optional; defaults fill in. Minimum practical set: `systemPrompt`, `model`, `tools`.
+The driver uses a fresh `Agent` per todo. It keeps message state across turns for that todo, but QAgent decides when to observe, execute, retry, or stop.
 
 ```js
-import { Agent } from "@mariozechner/pi-agent-core";
-import { getModel, Type } from "@mariozechner/pi-ai";
-
 const agent = new Agent({
-  initialState: {
-    systemPrompt: "Drive the browser to accomplish the goal.",
-    model: getModel(provider, process.env.QAGENT_MODEL),
-    tools: [clickTool /*, fillTool, navigateTool */],
-    // thinkingLevel: "off",   // off | minimal | low | medium | high | xhigh
-    // toolExecution: "sequential",  // see gotchas
-  },
-  getApiKey: async () => process.env.QAGENT_API_KEY,
+  initialState: { systemPrompt: SYSTEM_PROMPT, model },
+  sessionId: randomUUID(),
+  transformContext: async (messages) => scrubOldSnapshots(messages, scrubState.baselineTurn),
+  streamFn: streamWithRequestAuth(resolveRequestAuth),
 });
 ```
 
-Defaults from source: `thinkingLevel: "off"`, `toolExecution: "parallel"`, `steeringMode/followUpMode: "one-at-a-time"`, `transport: "sse"`.
+The driver prompt requires a single JSON object. After `agent.prompt(...)`, read the newest assistant message, concatenate its text parts, parse JSON, and let `executor.js` perform the Playwright action locally.
 
-## defining a tool
+## verifier agent shape
 
-`Type` is re-exported from `pi-ai` — no need to install `typebox` separately. `execute` receives `(toolCallId, params, signal, onUpdate)` and must return `{ content, details?, isError?, terminate? }`. Content types are `{type:"text", text}` and `{type:"image", data, mimeType}` — no others.
-
-```js
-import { Type } from "@mariozechner/pi-ai";
-
-const clickTool = {
-  name: "click",
-  description: "Click element by ref (e.g. e5)",
-  parameters: Type.Object({ ref: Type.String() }),
-  execute: async (_toolCallId, { ref }, signal, _onUpdate) => {
-    signal?.throwIfAborted?.();
-    await click(page, ref);               // our tools.js
-    const snapshot = await observe(page); // our observer.js
-    return {
-      content: [{ type: "text", text: snapshot }],
-      details: { ref, kind: "click" },    // trace-only, not sent to LLM
-    };
-  },
-};
-```
-
-- `details` is arbitrary JSON that travels with the `toolResult` but is **not** sent to the LLM. Good place for trace payloads we don't want to burn context on.
-- `onUpdate` streams partial progress events to subscribers. UI-only; the LLM never sees partials. Usually ignored.
-- Errors: **throw** from `execute()`. pi-agent catches and emits a toolResult with `isError: true`. Returning `isError` yourself does not work.
-
-## running a prompt
-
-`agent.prompt(text)` returns `Promise<void>` that resolves after the full loop ends (including awaited `agent_end` subscribers). It does not return a result — read `agent.state.messages` afterward.
+The verifier uses a separate one-shot `Agent` with its own system prompt and the verifier model when configured. It returns `{ outcome: "pass" | "fail", evidence }` and retries once on provider or parse failure.
 
 ```js
-await agent.prompt(`Goal: ${todo.goal}\n\nInitial page:\n${await observe(page)}`);
-const msgs = agent.state.messages;
-const lastAssistant = [...msgs].reverse().find(m => m.role === "assistant");
-const finalText = lastAssistant?.content.filter(c => c.type === "text").map(c => c.text).join("");
-```
-
-Throws if called while already running. One prompt at a time; use `steer()`/`followUp()` to inject mid-run or queue.
-
-## events
-
-For a single turn with one tool call, events fire in this order (from `agent-loop.ts`):
-
-```
-agent_start
-turn_start
-message_start (user)                                    message_end
-message_start (assistant)  message_update* (deltas)     message_end
-tool_execution_start  tool_execution_update*  tool_execution_end
-message_start (toolResult)                              message_end
-turn_end               // one LLM call + its tool batch
-turn_start ... turn_end  // next turn, LLM reacts to toolResult
-agent_end
-```
-
-Subscribe:
-
-```js
-let turns = 0;
-agent.subscribe(async (e) => {
-  if (e.type === "turn_end" && ++turns >= 20) agent.abort();
-  if (e.type === "tool_execution_start") recorder.log("action", { name: e.toolName, args: e.args });
-  if (e.type === "tool_execution_end")   recorder.log("result", { id: e.toolCallId, result: e.result });
-  if (e.type === "message_end" && e.message.role === "assistant") recorder.log("assistant", e.message);
+const agent = new Agent({
+  initialState: { systemPrompt: VERIFIER_PROMPT, model },
+  streamFn: streamWithRequestAuth(resolveRequestAuth),
 });
+
+await agent.prompt(
+  `Goal: ${goal}\n\n` +
+  `Driver verdict: ${JSON.stringify(verdict)}\n\n` +
+  `Final URL: ${finalUrl}\n\n` +
+  `Actions taken:\n${actionsBlock}\n\n` +
+  `Final snapshot:\n${finalSnapshot}\n\n` +
+  `Your JSON:`
+);
 ```
-
-- Turn cap: count `turn_end`.
-- Recorder/trace: `tool_execution_start/end` + `message_end` for assistant text + `agent_end` to flush.
-
-## abort and turn cap
-
-Turn cap: count `turn_end` and call `agent.abort()`. External abort (Ctrl-C, timeout): also `agent.abort()` — it flips an internal `AbortController` that your tool's `execute()` receives as `signal`. `prompt()` resolves cleanly after in-flight work drains.
-
-```js
-process.on("SIGINT", () => { agent.abort(); });
-
-const killer = setTimeout(() => agent.abort(), 5 * 60_000);
-try { await agent.prompt(goal); } finally { clearTimeout(killer); }
-```
-
-## Ollama / OpenAI-compatible endpoint
-
-Don't use `getModel()` for local/custom endpoints — build a `Model<"openai-completions">` literal and pass it to `initialState.model`.
-
-```js
-const ollama = {
-  id: "qwen2.5-coder:32b",
-  name: "Qwen 2.5 Coder 32B",
-  api: "openai-completions",
-  provider: "ollama",
-  baseUrl: "http://localhost:11434/v1",
-  reasoning: false,
-  input: ["text"],
-  contextWindow: 32768, maxTokens: 8192,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  compat: { supportsDeveloperRole: false, supportsReasoningEffort: false },
-};
-const agent = new Agent({ initialState: { model: ollama, ... }, getApiKey: async () => "ollama" });
-```
-
-## gotchas
-
-- **`getModel()` returns `undefined` on typos** — silent. Always assert.
-- **One prompt at a time.** `prompt()` throws if called while running. Use `steer()` mid-run, `followUp()` to queue after done.
-- **`systemPrompt` and `messages` are state, not per-prompt.** `prompt()` does not reset them. Call `agent.reset()` between todos or spin up a fresh Agent.
-- **Tool errors must throw.** Returning `{ isError: true }` yourself does not flag the loop.
-- **`details` is not sent to the LLM.** Only `content` is. Put large trace payloads in `details` so context stays small.
-- **Parallel tool execution is the default.** All our tools mutate page state — set `toolExecution: "sequential"` on the Agent (or `executionMode: "sequential"` per tool) to prevent two clicks racing.
-- **`terminate: true`** from a tool only ends the loop when **every** tool in that batch returns it. Mixed batches keep going.
-- **Message ordering under parallel execution:** `tool_execution_end` fires in completion order, but persisted `toolResult` messages are in assistant source order. Trust `state.messages` for replay, not event order.
-- **`prompt()` awaits subscriber promises.** A hanging async subscriber hangs `prompt()`. Keep subscribers fast or fire-and-forget.
-- **`thinkingLevel` defaults to `"off"`.** For reasoning models (Claude, GPT-5), bump to `"low"` or `"medium"` or leave quality on the table.
-- **Snapshot size matters.** Each tool result goes into the transcript and is re-sent every turn. Our observer YAML can get large — trim or summarize if context blows up.
 
 ## what we do not use
 
-- `steer()` / `followUp()` — interactive flows; our loop is one-shot per todo.
-- `thinkingLevel` higher than `"low"` for MVP — cost/latency before we see if it helps.
-- `onUpdate` partial streaming — no UI yet.
-- pi-ai's OAuth / credentials flow — OpenRouter is simple API key.
+- pi-agent tool registration / `execute` hooks. Browser actions stay in `src/tools.js` and are called by `executor.js`.
+- pi-agent event tracing. QAgent records turns through the executor and reporter pipeline.
+- `steer()` / `followUp()`. The loop is controlled by QAgent.
+- `thinkingLevel` above the package defaults for now.
+- Pi-managed OAuth / subscription credentials in the standalone CLI. The CLI still uses QAgent's API-key config/env flow; the future Pi package should resolve auth through Pi's model registry.

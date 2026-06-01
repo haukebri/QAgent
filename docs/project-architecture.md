@@ -4,88 +4,99 @@ AI-driven QA testing. Browser is driven by script. LLM is the decider.
 
 ## modules
 
-Each module is one file, one or two exported functions. No classes.
-
-### browser.js
-
-Browser lifecycle. Exports `launchPage({ httpCredentials })` which opens
-chromium (Chrome channel with chromium fallback), applies the stealth
-defaults (UA, locale, local timezone, viewport, webdriver/languages init script),
-and returns `{ browser, page }`. Single source of truth for the
-bot-detection escalation ladder below.
-
-### tools.js
-
-Browser surface. Read + write functions that take a playwright page:
-`observe(page)` returns the ai-mode ariaSnapshot YAML (refs baked in as
-`[ref=eN]`); `click`, `fill`, `selectOption`, `pressKey`, `type` resolve refs via
-`page.locator('aria-ref=${ref}')`. `navigate(page, url)` is used by `cli.js`
-for the pre-navigate phase; it is no longer exposed as an LLM action.
-
-### verifier.js
-
-End-state judge. Single LLM call over (goal, driver verdict, action history,
-final URL, final snapshot); returns `{ outcome: 'pass'|'fail', evidence }`.
-Source of truth for the run's outcome. Does not call playwright — the executor
-freezes state and passes it in.
-
-### planner.js
-
-Goal to ordered todos. One LLM call with JSON output.
-Each todo has a verifiable end-state.
-
-### executor.js
-
-The loop. For one todo: observe, LLM picks action, run action, verify.
-Exits on done, stuck, or turn cap.
-
-### recorder.js
-
-Append JSON lines to a trace file.
-
-### runner.js
-
-Top level. Load spec, run planner, iterate todos through executor.
+QAgent is currently a single-goal CLI. There is no spec planner or runner layer
+in the shipped package; `cli.js` is the top-level orchestrator.
 
 ### cli.js
 
-Parse argv, call runner.
+Entry point for `qagent`. Parses argv, dispatches `qagent config`, layers
+flag/env/project/user config, resolves provider/model/API-key values, strips
+basic-auth credentials from the start URL, creates reporters, launches the
+browser, pre-navigates to the URL, calls `runTodo()`, and maps the result to an
+exit code.
+
+### browser.js
+
+Browser lifecycle. Exports `launchPage({ httpCredentials, headed })`, opens
+Chrome with bundled Chromium fallback, applies stealth defaults (UA, locale,
+local timezone, viewport, webdriver/languages init script), and returns
+`{ browser, page }`. Single source of truth for the bot-detection escalation
+ladder below.
+
+### tools.js
+
+Browser surface. `observe(page)` returns Playwright's ai-mode ariaSnapshot YAML
+with refs baked in as `[ref=eN]`. `click`, `fill`, `selectOption`, `pressKey`,
+and `type` resolve refs via `aria-ref=${ref}` and mutate the page. `navigate` is
+used by `cli.js` for setup/pre-navigation; it is not exposed as a driver action.
+
+### executor.js
+
+Driver loop for one goal. It observes and settles the page, compresses snapshots
+against a baseline, asks the driver LLM for one JSON action through
+`pi-agent-core`, executes the local Playwright action, records history, detects
+repeated no-progress actions, and exits on `done`, `fail`, stuck, timeout, or
+turn cap. The final outcome is still decided by `verifier.js`.
+
+### verifier.js
+
+End-state judge. Single LLM call over goal, driver verdict, action history,
+final URL, and final snapshot. Returns `{ outcome: 'pass'|'fail', evidence }`
+and retries once on provider/parse failure. Does not call Playwright; the
+executor freezes state and passes it in.
+
+### llm-auth.js
+
+Adapts pi-ai streaming to QAgent's auth boundary. The standalone CLI supplies
+`{ apiKey }`; a future Pi package can supply `{ apiKey, headers }` from Pi's
+model registry.
+
+### providers.js
+
+Standalone CLI provider metadata and API-key resolution. `provider` defaults to
+`openrouter`; top-4 provider env vars are recognized after `QAGENT_API_KEY`.
+
+### config.js / config-cmd.js
+
+User/project config loading, coercion, validation, and `qagent config` commands.
+User config is `~/.config/qagent/config.json`; project config is
+`./qagent.config.json` in the current working directory.
+
+### observe-settle.js / snapshot-compress.js
+
+Page stability, fingerprinting, previous-action diffs, compact observation
+payloads, and snapshot compression against a baseline anchor.
+
+### reporters.js / recorder.js
+
+Human list output, JSON, NDJSON, and trace-file output. `recorder.js` builds the
+trace payload and writes `results/*.json` for the `trace` reporter.
 
 ## dependencies
 
-- `playwright`: browser driver. Used only in browser.js and tools.js.
-- `pi-ai`: model lookup across 21+ providers. Used by the CLI/demo. Selected via the `provider` config key (default `openrouter`).
-- `pi-agent-core`: driver and verifier LLM calls. Used by executor.js and verifier.js.
+- `playwright`: browser driver. Used by `browser.js`, `tools.js`, and the
+  settle/observe helpers.
+- `@earendil-works/pi-ai`: model lookup and streaming across providers. Selected via the `provider` config key (default `openrouter`).
+- `@earendil-works/pi-agent-core`: stateful driver and verifier LLM conversations. Browser actions still run through QAgent's executor/tools modules.
 
 ## data flow
 
 ```
-spec -> runner -> planner returns todos
-for each todo:
-  executor loop: observe -> LLM decide -> tool -> verifier
-  recorder captures every step
-runner aggregates results
+CLI goal + URL
+  -> config/provider/API-key resolution
+  -> browser launch + pre-navigate
+  -> executor loop: observe/settle -> LLM JSON action -> local tool
+  -> verifier judges final state
+  -> reporters emit list/json/ndjson/trace output
 ```
-
-## build order
-
-1. `observe.js`: open a page with playwright, dump the a11y tree
-2. `tools.js`: observe (wraps `ariaSnapshot({ mode: 'ai' })`), click, fill, navigate (setup-only since the pre-navigate migration)
-3. `browser.js`: chromium launch + stealth defaults, shared by observe.js and demo.js
-4. `executor.js`: hardcoded todo, full loop working end to end
-5. `recorder.js`: trace output
-6. `planner.js`: goal to todos
-7. `runner.js` and `cli.js`: wire it up
-8. eval harness against a reference app
 
 ## rules
 
-- No classes.
+- Functions first; avoid domain classes. Small error subclasses are okay.
 - No folders until a module outgrows a file.
 - No TypeScript until something breaks without it.
-- No config objects. Function arguments only.
-- Under 200 lines for the MVP.
-- If a module needs more than two exports, split or simplify.
+- Prefer explicit function arguments at module boundaries.
+- Split or simplify when a file becomes a dumping ground.
 
 ## bot-detection escalation
 

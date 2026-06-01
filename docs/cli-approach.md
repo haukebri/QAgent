@@ -4,22 +4,22 @@
 
 This project is being renamed from **QA-Runner** to **QAgent**. The npm package is `@qagent/cli` and the binary is `qagent`.
 
-QAgent today runs end-to-end via `src/demo.js`: a goal string is passed as a positional arg, env vars carry the API key and model, and a JSON trace is written under `results/`. That's enough to validate the loop, but it isn't a CLI: there's no `bin` entry, no flag parsing, no config layering, and nothing that another agent (Claude Code, CI) can wrap cleanly.
+QAgent now runs end-to-end via `src/cli.js`: a goal string and URL are passed to the `qagent` binary, config/env/flags resolve the provider, model, and API key, and reporters control human, JSON, NDJSON, or trace output.
 
-This document proposes the CLI surface — what to build, what to copy from `pi-mono` / `agent-browser` / `playwright`, and what to leave out. **Specs, planner, and runner orchestration are explicitly out of scope** for this round; the CLI accepts a single goal string and runs it through the existing executor.
+This document records the CLI surface and the KISS choices behind it. **Specs, planner, and runner orchestration are explicitly out of scope** for this round; the CLI accepts a single goal string and runs it through the executor.
 
 ---
 
-## Status (2026-04-27)
+## Status (2026-06-01)
 
-Built incrementally. Milestones 1 and 2 shipped; rest pending.
+Built incrementally; the v1 CLI surface is live.
 
-- **Milestone 1 — Bare binary** [done] (commit `8a358ed`). `qagent "<goal>"` runs the executor end-to-end with `--model` / `--verifier-model` / `--api-key` / `--max-turns` / `--headed` (no-op for now) / `--version` / `--help` flags. Reads `QAGENT_MODEL`, `QAGENT_API_KEY`, `OPENROUTER_API_KEY` from env. Exit codes 0/1/2/3. **No trace file by default** (behavior change from `demo.js`). Unknown flags warn but don't crash. `bin: { qagent: "src/cli.js" }` in `package.json`.
-- **Milestone 2 — Config layering** [done]. `src/config.js` reads `~/.config/qagent/config.json` (user, XDG-style) and `./qagent.config.json` (project, cwd-only, no walk-up). Precedence per §3: flag > env > project > user. Hand-edited JSON; missing files = empty; malformed JSON = exit 2 with file path. Unknown keys silently ignored. Recognized keys: `model`, `verifierModel`, `apiKey`, `maxTurns`.
+- **Milestone 1 — Bare binary** [done] (commit `8a358ed`). `qagent "<goal>"` runs the executor end-to-end with `--model` / `--verifier-model` / `--api-key` / `--max-turns` / `--headed` / `--version` / `--help` flags. Reads `QAGENT_MODEL`, `QAGENT_API_KEY`, and provider-specific key env vars. Exit codes 0/1/2/3. **No trace file by default.** Unknown flags warn but don't crash. `bin: { qagent: "src/cli.js" }` in `package.json`.
+- **Milestone 2 — Config layering** [done]. `src/config.js` reads `~/.config/qagent/config.json` (user, XDG-style) and `./qagent.config.json` (project, cwd-only, no walk-up). Precedence per §3: flag > env > project > user. Hand-edited JSON; missing files = empty; malformed JSON = exit 2 with file path. Unknown keys are ignored on read and rejected on write. Recognized keys: `model`, `verifierModel`, `provider`, `apiKey`, `url`, `maxTurns`, `testTimeout`, `networkTimeout`, `actionTimeout`, `reporter`, `outputDir`, `headed`.
 - **Milestone 3 — `config` subcommand** [done]. `qagent config set [--project] <key> <value>` writes user config (default) or project config; only user config gets `0o600`. `qagent config list` prints all known keys with their effective value and source (env/project/user/default/unset) plus the file paths. `apiKey` is redacted in list output (`sk-or-...wxyz` form). Strict on writes (unknown key → exit 2; `maxTurns` must be a positive integer); lenient on reads. `qagent config --help` shows usage. Implementation lives in `src/config-cmd.js`; data-layer ops (load, write, path resolution) in `src/config.js`.
-- **Milestone 4 — Reporter system + `--headed` + config integration** [done]. Composable `--reporter=list,json,ndjson,trace` (default `list`); flag value replaces default rather than merging. `list` keeps the human progress + summary output unchanged; `json` dumps the full trace payload to stdout at end; `ndjson` streams `{event:"turn",...}` per executed turn followed by a `{event:"done",goal,outcome,turns,elapsedMs,cost,...}` envelope; `trace` writes to `results/<iso>.json` (or `--output-dir <path>`) and reports the path on **stderr** so machine-readable reporters keep stdout clean. `--headed` is now wired through `launchPage` (`headless: !headed`). Three new config keys land in the layer: `reporter` (array), `outputDir` (string), `headed` (boolean) — set via `qagent config set` with type coercion (`'true'/'1'` and `'false'/'0'` for booleans, comma-separated for the array). New module `src/reporters.js`; `src/recorder.js` factored to expose `buildPayload()`; `runTodo` gained an optional `onTurn` 7th param (no-op default keeps `demo.js` compatible).
+- **Milestone 4 — Reporter system + `--headed` + config integration** [done]. Composable `--reporter=list,json,ndjson,trace` (default `list`); flag value replaces default rather than merging. `list` keeps the human progress + summary output unchanged; `json` dumps the full trace payload to stdout at end; `ndjson` streams `{event:"turn",...}` per executed turn followed by a `{event:"done",goal,outcome,turns,elapsedMs,cost,...}` envelope; `trace` writes to `results/<iso>.json` (or `--output-dir <path>`) and reports the path on **stderr** so machine-readable reporters keep stdout clean. `--headed` is wired through `launchPage` (`headless: !headed`).
+- **Provider abstraction + Pi-dev auth prep** [done]. `provider` selects the real model provider (default `openrouter`), top-4 provider env vars are supported, and `src/llm-auth.js` lets a future Pi package pass `{ apiKey, headers }` without inventing `provider=pi`.
 - **Agent ergonomics.** The `done` envelope event shipped in M4's ndjson reporter. There is no separate print mode in the current CLI surface.
-- **`demo.js`** still in tree as a legacy helper and accepts the same OpenRouter env vars as the CLI. Removal deferred until user signal.
 
 ---
 
@@ -62,7 +62,7 @@ qagent --url https://signup.example.com "User can sign up with email"
 qagent --url https://aida.de "User can browse ships" --headed
 ```
 
-No spec files, no directories of specs, no multi-goal batches in v1. Spec format and the planner come later — this CLI is the thin shell over `runTodo()` that today's `demo.js` already is.
+No spec files, no directories of specs, no multi-goal batches in v1. Spec format and the planner come later; this CLI is the thin shell over `runTodo()`.
 
 A separate `config` subcommand handles read/write of the user and project config files (covered in §3 below). This isn't "modes for running tests" — it's the sibling utility every CLI of this shape ships (`git config`, `npm config`, `gh config`, `pi config`).
 
@@ -82,6 +82,7 @@ The user config is the headline feature: install once, set `model` and `apiKey` 
 
 ```json
 {
+  "provider": "openrouter",
   "model": "qwen/qwen3.5-flash-02-23",
   "verifierModel": "qwen/qwen3.5-flash-02-23",
   "apiKey": "sk-or-..."
@@ -98,9 +99,10 @@ Same schema; cwd-only, no walk-up. Used to pin a specific model for a given proj
 
 ```json
 {
-  "model": "anthropic/claude-sonnet-4.5",
+  "provider": "anthropic",
+  "model": "claude-sonnet-4-5",
   "maxTurns": 80,
-  "reporters": ["list"]
+  "reporter": ["list"]
 }
 ```
 
@@ -111,7 +113,8 @@ Modeled on `git config` / `npm config`. Default scope is the **user** config; pa
 ```bash
 qagent config set model qwen/qwen3.5-flash-02-23
 qagent config set apiKey sk-or-...
-qagent config set --project model anthropic/claude-sonnet-4.5
+qagent config set --project provider anthropic
+qagent config set --project model claude-sonnet-4-5
 
 qagent config list                   # prints effective config with provenance
 qagent config --help                 # prints keys, types, defaults, env vars
@@ -222,11 +225,14 @@ Environment:
   QAGENT_URL                Start URL (required if not passed via flag/config)
   QAGENT_PROVIDER           LLM provider (default openrouter)
   QAGENT_API_KEY            Preferred env var (any provider)
+  QAGENT_MODEL              Driver model id
   OPENROUTER_API_KEY        Per-provider fallback when provider=openrouter
   ANTHROPIC_API_KEY         Per-provider fallback when provider=anthropic
   OPENAI_API_KEY            Per-provider fallback when provider=openai
   GEMINI_API_KEY            Per-provider fallback when provider=google
-  QAGENT_MODEL              Default model if no flag/config
+  QAGENT_TEST_TIMEOUT       Wall-clock loop budget in seconds
+  QAGENT_NETWORK_TIMEOUT    Per page.goto timeout in seconds
+  QAGENT_ACTION_TIMEOUT     Per click/fill timeout in seconds
 
 Resolution order: CLI flag > env > project config > user config > built-in default
 
@@ -270,10 +276,9 @@ Answer: not sure what you mean, do what you think is better
 
 ## Out of scope (explicitly deferred)
 
-- **Spec files, runner.js, planner.js** — the CLI runs a single inline goal. Spec format and orchestration come later as a separate design.
+- **Spec files and multi-goal orchestration** — the CLI runs a single inline goal. Spec format and orchestration come later as a separate design.
 - **More subcommands** (`qagent show-report`, `qagent replay`, `qagent serve`) — `config` is enough for v1; add others only when a real need appears.
 - **HTML reporter** — `ndjson` and opt-in `trace` cover the immediate use cases.
-- **Provider abstraction** [done, v1]. `provider` config key, top-4 env-var fallbacks. See `docs/providers.md`.
 - **File-locked auth store** — plain JSON with `0o600` is enough for now.
 - **MCP server mode** — could add `qagent serve --mcp` later.
 - **Config walk-up / merging multiple project configs** — start strict.

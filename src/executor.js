@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { Agent } from '@mariozechner/pi-agent-core';
+import { Agent } from '@earendil-works/pi-agent-core';
+import { streamWithRequestAuth } from './llm-auth.js';
 import { observe, click, fill, selectOption, pressKey, type } from './tools.js';
 import { verify } from './verifier.js';
 import { compressAgainstBaseline } from './snapshot-compress.js';
@@ -60,7 +61,7 @@ export async function runTodo(
   page,
   goal,
   model,
-  apiKey,
+  resolveRequestAuth,
   maxTurns = 20,
   verifierModel = null,
   onTurn = null,
@@ -74,7 +75,7 @@ export async function runTodo(
     initialState: { systemPrompt: SYSTEM_PROMPT, model },
     sessionId: randomUUID(),
     transformContext: async (messages) => scrubOldSnapshots(messages, scrubState.baselineTurn),
-    getApiKey: async () => apiKey,
+    streamFn: streamWithRequestAuth(resolveRequestAuth),
   });
 
   const history = [];
@@ -439,7 +440,7 @@ export async function runTodo(
   let evidence;
   let verifierTokens = null;
   try {
-    const result = await verify(goal, verifierVerdict, history, finalUrl, finalSnapshot, judgeModel, apiKey);
+    const result = await verify(goal, verifierVerdict, history, finalUrl, finalSnapshot, judgeModel, resolveRequestAuth);
     outcome = result.outcome;
     evidence = result.evidence;
     verifierTokens = result.tokens;

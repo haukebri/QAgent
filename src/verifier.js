@@ -1,4 +1,5 @@
-import { Agent } from '@mariozechner/pi-agent-core';
+import { Agent } from '@earendil-works/pi-agent-core';
+import { streamWithRequestAuth } from './llm-auth.js';
 
 const SYSTEM_PROMPT =
   'You are a QA verifier. Given a goal, the action trajectory an AI driver took, and the final page state, decide whether the goal was actually achieved.\n\n' +
@@ -11,11 +12,11 @@ const SYSTEM_PROMPT =
   '- Page state may contain stale leftovers from earlier attempts in the same session (toast/notification text, alert regions, URL fragments pointing at error anchors). Weight evidence by structural prominence: text in the main content tree outranks text in notification, alert, or live-region containers. When success and failure signals are both present, treat the disappearance or replacement of the interactive UI (form gone, search box replaced by results, etc.) as the decisive signal — alert text can persist from earlier attempts even after the action ultimately succeeded.\n' +
   '- If the goal asks a question, the evidence sentence must contain the answer, or explicitly state the answer is not present.';
 
-export async function verify(goal, verdict, history, finalUrl, finalSnapshot, model, apiKey) {
+export async function verify(goal, verdict, history, finalUrl, finalSnapshot, model, resolveRequestAuth) {
   let lastError = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      return await callJudge({ goal, verdict, history, finalUrl, finalSnapshot, model, apiKey });
+      return await callJudge({ goal, verdict, history, finalUrl, finalSnapshot, model, resolveRequestAuth });
     } catch (err) {
       lastError = err;
     }
@@ -23,10 +24,10 @@ export async function verify(goal, verdict, history, finalUrl, finalSnapshot, mo
   throw new Error(`verifier failed after retry: ${lastError?.message?.split('\n')[0] ?? 'unknown'}`);
 }
 
-async function callJudge({ goal, verdict, history, finalUrl, finalSnapshot, model, apiKey }) {
+async function callJudge({ goal, verdict, history, finalUrl, finalSnapshot, model, resolveRequestAuth }) {
   const agent = new Agent({
     initialState: { systemPrompt: SYSTEM_PROMPT, model },
-    getApiKey: async () => apiKey,
+    streamFn: streamWithRequestAuth(resolveRequestAuth),
   });
 
   const actionsBlock = history.length

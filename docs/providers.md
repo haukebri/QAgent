@@ -2,27 +2,21 @@
 
 ## Context
 
-QAgent today is wired exclusively to **OpenRouter**, even though the underlying LLM library (pi-ai) already supports 21+ providers through the same API — Anthropic, OpenAI, Google, Groq, xAI, Mistral, Cerebras, Bedrock, and a long tail of others.
+QAgent supports multiple LLM providers through `@earendil-works/pi-ai`. The CLI still defaults to OpenRouter for continuity, but users can select Anthropic, OpenAI, Google, and other pi-ai providers with the `provider` config key or `--provider`.
 
-The consequences:
-
-- Users who already have an **Anthropic or OpenAI key** have no way to use it without going through OpenRouter (extra hop, extra cost margin, extra account).
-- The CLI's help text and error messages reference OpenRouter exclusively, reinforcing the lock-in feel — a user on Anthropic who sees "get a key at openrouter.ai/keys" in an error message is being misdirected.
-- Provider-specific environment variables that users already have (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`) are ignored. Only `QAGENT_API_KEY` and `OPENROUTER_API_KEY` are recognized today.
-
-The fix is small in code but has real surface-area decisions in config, env vars, defaults, and error UX — hence this milestone.
+Provider selection and API-key lookup are intentionally small: the CLI resolves one model provider, one model id, and one request-auth source before the browser run starts. The executor and verifier receive a `Model` object plus a request-auth resolver, so a future Pi package can supply Pi-managed `{ apiKey, headers }` auth without turning `pi` into a fake model provider.
 
 ---
 
 ## Status
 
-[pending]
+[done]
 
 ---
 
 ## Goals / Scope
 
-- Let the user pick **any pi-ai-supported provider** through a new `provider` config key.
+- Let the user pick **any pi-ai-supported provider** through the `provider` config key.
 - Provider selectable through the same precedence chain we already use elsewhere: **flag > env > project config > user config > default**, to stay consistent with the existing config story (`docs/cli-approach.md` §3).
 - **Provider-aware help and error messages** — when the user is on Anthropic, the "missing API key" error points them at Anthropic's console, not OpenRouter's.
 - **Per-provider env-var fallbacks** for the four most common providers (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`) so users with existing provider-specific env vars don't have to rename them. `QAGENT_API_KEY` remains the canonical, provider-agnostic env var.
@@ -42,7 +36,7 @@ The fix is small in code but has real surface-area decisions in config, env vars
 
 ### Module boundary
 
-A new file `src/providers.js` owns everything provider-specific. It exports:
+`src/providers.js` owns standalone CLI provider-specific API-key lookup. It exports:
 
 ```
 PROVIDERS                                  // static map; one row per supported provider
@@ -60,11 +54,12 @@ providerHelpUrl(provider)                  // string for "go get a key" line; nu
 | `openai` | `OPENAI_API_KEY` | `https://platform.openai.com/api-keys` |
 | `google` | `GEMINI_API_KEY` | `https://aistudio.google.com/apikey` |
 
-The pi-ai `Model` object is constructed only in `cli.js` and passed as an opaque argument from there on. `executor.js`, `verifier.js`, `tools.js`, `observe.js`, `recorder.js`, `browser.js`, `reporters.js` are **untouched**.
+The pi-ai `Model` object is constructed in `cli.js` and passed as an opaque argument from there on. `executor.js` and `verifier.js` accept a request-auth resolver rather than a raw key, via `src/llm-auth.js`.
 
 ### Touched files
 
-- **`src/providers.js`** — new file with the three exports above.
+- **`src/providers.js`** — owns standalone provider key lookup and help URLs.
+- **`src/llm-auth.js`** — wraps pi-ai `streamSimple` so callers can supply `{ apiKey, headers }`.
 - **`src/cli.js`** —
   - Add `--provider <name>` to `VALUE_FLAGS` (mapped to `provider`).
   - Resolve `provider` with the standard precedence chain (default `openrouter`).
@@ -137,18 +132,18 @@ Ollama runs locally and pi-ai accepts any non-empty string as the "key". Setting
 
 - Auto-detecting the provider from the model-ID prefix (fragile; pi-ai doesn't enforce a naming convention).
 - Cross-provider model fallback or retry.
-- OAuth-based providers (GitHub Copilot, Gemini CLI, Antigravity) — these need a credentials story beyond a single API-key string and warrant their own design.
+- Pi-managed OAuth/subscription credentials in the standalone CLI. The future Pi package should use Pi's model registry to supply `{ apiKey, headers }` through QAgent's request-auth resolver.
 - Separate `verifierProvider`. The pattern is established (`verifierModel`); add it later if a real cross-provider workflow appears.
 - Expanding the per-provider env-var map past the top 4. Add entries on demand.
 
 ---
 
-## Doc touches (deferred to implementation)
+## Doc Touches
 
-These references to OpenRouter need updating once the code lands. Listed here so the implementation plan covers them:
+These references were updated when provider abstraction landed:
 
-- `README.md` — "OpenRouter Setup" section, "An OpenRouter API key" prerequisite, `--api-key` description in the help excerpt, `model` config note.
-- `docs/cli-approach.md` — `--api-key` flag description (line 203), `apiKey` env-var help (line 220–221), the example error message (line 145), the "Provider abstraction — OpenRouter only in v1" entry under deferred work (line 270).
-- `docs/project-goal.md` — "OpenRouter is the only supported model provider for now" (line 27).
+- `README.md` — provider setup, provider-local model IDs, `--api-key` help, and config examples.
+- `docs/cli-approach.md` — provider config examples, API-key wording, env-var help, and deferred-work status.
+- `docs/project-goal.md` — current multi-provider support.
 - `docs/project-architecture.md` — pi-ai dependency description (line 56).
 - `docs/pi-agent-usage.md` — section title and inline examples (lines 19–61) to reflect provider abstraction.

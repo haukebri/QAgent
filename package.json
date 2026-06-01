@@ -23,6 +23,7 @@
     "src/config-cmd.js",
     "src/config.js",
     "src/executor.js",
+    "src/llm-auth.js",
     "src/observe-settle.js",
     "src/providers.js",
     "src/recorder.js",
@@ -32,15 +33,15 @@
     "src/verifier.js"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22.19.0"
   },
   "scripts": {
     "test": "echo \"No tests configured\""
   },
   "keywords": [],
   "dependencies": {
-    "@mariozechner/pi-agent-core": "0.70.0",
-    "@mariozechner/pi-ai": "0.70.0",
+    "@earendil-works/pi-agent-core": "0.78.0",
+    "@earendil-works/pi-ai": "0.78.0",
     "playwright": "^1.59.1"
   }
 }

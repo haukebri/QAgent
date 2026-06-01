@@ -13,33 +13,35 @@ See `docs/project-goal.md` for goals and `docs/project-architecture.md` for the 
 ```bash
 npm install          # install dependencies
 npm test             # (not yet configured)
-node src/cli.js      # entry point (once built)
+node src/cli.js      # CLI entry point
 ```
 
 ## Architecture
 
-Data flow: `spec → runner → planner (LLM) → todos → executor loop (observe → LLM decide → tool → verify) → results`
+Data flow: `CLI goal + URL -> config/provider/auth resolution -> browser launch + pre-navigate -> executor loop (observe -> LLM JSON action -> local Playwright tool) -> verifier -> reporters/results`
 
-Modules (each is one file, one or two exports, no classes):
+Modules:
 
 | Module | Role | Key dependencies |
 |---|---|---|
-| observer.js | Page → ai-mode ariaSnapshot YAML string (refs baked in by Playwright) | playwright |
-| tools.js | Browser actions (click, fill, navigate) via `(page, ref, args)`; resolves ref with `aria-ref=${ref}` | playwright |
-| verifier.js | LLM judge: goal + trajectory + final snapshot → `{outcome, evidence}` | pi-agent-core |
-| planner.js | Goal → ordered todos with verifiable end-states (single LLM call, JSON output) | pi-ai |
-| executor.js | The loop: observe → LLM pick → act → verify. Exits on done/stuck/turn-cap | pi-ai, pi-agent-core |
-| recorder.js | Append JSON lines to a trace file | — |
-| runner.js | Top-level orchestrator: load spec, plan, iterate todos through executor | — |
-| cli.js | Parse argv, call runner | — |
+| cli.js | Parse argv, layer config/env/project values, resolve provider/model/auth, launch browser, run reporters | @earendil-works/pi-ai |
+| browser.js | Chromium lifecycle, stealth-ish defaults, headed/headless mode, optional HTTP credentials | playwright |
+| tools.js | Observe and perform browser actions via Playwright refs; `navigate` is setup-only | playwright |
+| executor.js | Driver loop: settle/observe, ask LLM for one JSON action, execute locally, detect stuck/done/fail/timeouts | @earendil-works/pi-agent-core |
+| verifier.js | End-state LLM judge: goal + trajectory + final snapshot -> `{outcome, evidence}` | @earendil-works/pi-agent-core |
+| llm-auth.js | Wrap `streamSimple` so standalone auth and future Pi auth can both supply `{apiKey, headers}` | @earendil-works/pi-ai |
+| providers.js | Standalone CLI provider metadata and API-key resolution | — |
+| config.js / config-cmd.js | User/project config loading, validation, and `qagent config` commands | — |
+| observe-settle.js / snapshot-compress.js | Page stability, snapshot diffing, and context compression | — |
+| reporters.js / recorder.js | Human/JSON/NDJSON/trace output | — |
 
 ## Code Rules
 
-- No classes. Functions only.
+- Functions first. Avoid domain classes; small error subclasses are okay when they keep CLI errors explicit.
 - No folders until a module outgrows a file.
 - No TypeScript until something breaks without it.
-- No config objects — function arguments only.
-- Under 200 lines for the MVP.
+- Keep changes simple and local; prefer explicit function arguments at module boundaries.
+- Split or simplify when a file becomes a dumping ground.
 - Simplicity is better than abstraction
 - ES modules (`"type": "module"` in package.json).
-- Driver and verifier LLM calls go through OpenRouter.
+- Driver and verifier LLM calls go through `@earendil-works/pi-ai` / `@earendil-works/pi-agent-core`; OpenRouter is only the default provider.

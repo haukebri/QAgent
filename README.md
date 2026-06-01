@@ -67,7 +67,7 @@ You — or your coding agent — install once, then call `qagent` per verificati
 
 Requirements:
 
-- Node.js 20 or newer.
+- Node.js 22.19.0 or newer.
 - An API key for an LLM provider (OpenRouter is the default; Anthropic, OpenAI, and Google are also supported with built-in env-var fallbacks).
 - A Playwright Chromium browser install, or a reachable system Chrome.
 
@@ -116,6 +116,8 @@ If a run fails with a Playwright message like "Executable doesn't exist" or asks
 
 QAgent picks the LLM provider via the `provider` config key (default `openrouter`). The same provider is used for the driver and verifier models. Pi-ai supports many providers; QAgent ships per-provider env-var fallbacks for the four most common.
 
+Model IDs are provider-local. OpenRouter IDs often include a slash, while direct Anthropic IDs look like `claude-sonnet-4-5`.
+
 1. Pick your provider and grab an API key:
 
    - **OpenRouter** (default) — [openrouter.ai/keys](https://openrouter.ai/keys)
@@ -128,20 +130,20 @@ QAgent picks the LLM provider via the `provider` config key (default `openrouter
 
    ```bash
    qagent config set provider anthropic
-   qagent config set model anthropic/claude-sonnet-4.5
+   qagent config set model claude-sonnet-4-5
    qagent config set apiKey sk-ant-...
    ```
 
 3. Optionally use a different verifier model:
 
    ```bash
-   qagent config set verifierModel anthropic/claude-haiku-4.5
+   qagent config set verifierModel claude-haiku-4-5
    ```
 
 For CI, prefer env vars over config files. The provider-specific env vars are picked up automatically:
 
 ```bash
-QAGENT_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-... QAGENT_MODEL=anthropic/claude-sonnet-4.5 qagent --url <url> "<goal>"
+QAGENT_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-... QAGENT_MODEL=claude-sonnet-4-5 qagent --url <url> "<goal>"
 ```
 
 `QAGENT_API_KEY` is the provider-agnostic env var and works for any provider. If QAgent says `unknown model "<id>" for provider "<name>"`, check that the provider name and model ID are both valid for the installed `pi-ai` package.
@@ -256,12 +258,13 @@ QAgent reads from `~/.config/qagent/config.json` (user, XDG-style) and `./qagent
 
 ```bash
 qagent config set apiKey sk-or-...
-qagent config set --project model anthropic/claude-sonnet-4.5
+qagent config set --project provider anthropic
+qagent config set --project model claude-sonnet-4-5
 qagent config list                # show effective values + their sources
 qagent config --help              # all keys, types, defaults, valid values
 ```
 
-Recognized keys: `model`, `verifierModel`, `apiKey`, `url`, `maxTurns`, `testTimeout`, `networkTimeout`, `actionTimeout`, `reporter`, `outputDir`, `headed`.
+Recognized keys: `model`, `verifierModel`, `provider`, `apiKey`, `url`, `maxTurns`, `testTimeout`, `networkTimeout`, `actionTimeout`, `reporter`, `outputDir`, `headed`.
 
 ---
 

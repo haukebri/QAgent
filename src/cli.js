@@ -3,13 +3,11 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getModel } from '@earendil-works/pi-ai';
-import { launchPage } from './browser.js';
 import { ConfigError, loadConfig } from './config.js';
 import { runConfigCommand } from './config-cmd.js';
-import { runTodo } from './executor.js';
-import { navigate } from './tools.js';
 import { resolveApiKey } from './providers.js';
 import { KNOWN_REPORTERS, selectReporters } from './reporters.js';
+import { runQAgent } from './runner.js';
 
 const HELP = `Usage:
   qagent --url <url> [options] "<goal>"  Run a goal against a URL
@@ -146,21 +144,6 @@ async function main() {
   if (!rawUrl) {
     throw new ConfigError('no url. Pass --url, set QAGENT_URL, or set "url" in qagent.config.json / ~/.config/qagent/config.json.');
   }
-  let parsedUrl;
-  try {
-    parsedUrl = new URL(rawUrl);
-  } catch (err) {
-    throw new ConfigError(`invalid url: ${err.message}`);
-  }
-  const httpCredentials = parsedUrl.username
-    ? {
-        username: decodeURIComponent(parsedUrl.username),
-        password: decodeURIComponent(parsedUrl.password),
-      }
-    : undefined;
-  parsedUrl.username = '';
-  parsedUrl.password = '';
-  const startUrl = parsedUrl.toString();
 
   const { apiKey } = resolveApiKey({
     provider,
@@ -199,38 +182,29 @@ async function main() {
   if (!verifierModel) throw new ConfigError(`unknown verifier model "${verifierModelId}" for provider "${provider}"`);
 
   const reporters = selectReporters(reporterNames, { outputDir });
-  const ctx = { goal, modelId, verifierModelId, url: startUrl };
-  for (const r of reporters) await r.onStart?.(ctx);
+  const ctx = { goal, modelId, verifierModelId, url: rawUrl };
+  const onStart = async ({ url }) => {
+    ctx.url = url;
+    for (const r of reporters) await r.onStart?.(ctx);
+  };
   const onTurn = reporters.some((r) => r.onTurn)
     ? (h) => { for (const r of reporters) r.onTurn?.(h); }
     : null;
 
-  const tRun = Date.now();
-  let browser;
-  let page;
-  let result;
-  try {
-    ({ browser, page } = await launchPage({ httpCredentials, headed }));
-    try {
-      await navigate(page, startUrl, networkTimeoutSec * 1000);
-    } catch (err) {
-      result = buildErrorResult(err, page, tRun, 'pre-navigate failed');
-    }
-    if (!result) {
-      try {
-        result = await runTodo(
-          page, goal, model, resolveRequestAuth, maxTurns, verifierModel, onTurn,
-          testTimeoutSec * 1000, actionTimeoutSec * 1000,
-        );
-      } catch (err) {
-        result = buildErrorResult(err, page, tRun);
-      }
-    }
-  } catch (err) {
-    result = buildErrorResult(err, page, tRun);
-  } finally {
-    await browser?.close();
-  }
+  const result = await runQAgent({
+    url: rawUrl,
+    goal,
+    model,
+    resolveRequestAuth,
+    verifierModel,
+    maxTurns,
+    headed,
+    testTimeoutMs: testTimeoutSec * 1000,
+    networkTimeoutMs: networkTimeoutSec * 1000,
+    actionTimeoutMs: actionTimeoutSec * 1000,
+    onStart,
+    onTurn,
+  });
 
   for (const r of reporters) {
     await r.onEnd?.(result, ctx);
@@ -239,21 +213,6 @@ async function main() {
   if (result.outcome === 'pass') return 0;
   if (result.outcome === 'fail') return 1;
   return 3;
-}
-
-function buildErrorResult(err, page, startedAt, prefix = 'runner crashed') {
-  return {
-    outcome: 'error',
-    evidence: `${prefix}: ${err.message.split('\n')[0]}`,
-    llmVerdict: null,
-    turns: 0,
-    elapsedMs: Date.now() - startedAt,
-    tokens: { input: 0, output: 0, totalTokens: 0, cost: 0 },
-    verifierTokens: null,
-    finalUrl: page?.url?.() ?? 'about:blank',
-    history: [],
-    warnings: [],
-  };
 }
 
 function resolveTimeout(flagVal, envVal, projectVal, userVal, defaultSec, envName, configKey) {

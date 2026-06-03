@@ -4,9 +4,9 @@
 
 This project is being renamed from **QA-Runner** to **QAgent**. The npm package is `@qagent/cli` and the binary is `qagent`.
 
-QAgent now runs end-to-end via `src/cli.js`: a goal string and URL are passed to the `qagent` binary, config/env/flags resolve the provider, model, and API key, and reporters control human, JSON, NDJSON, or trace output.
+QAgent now runs end-to-end via `src/cli.js` and `src/runner.js`: a goal string and URL are passed to the `qagent` binary, config/env/flags resolve the provider, model, and API key, and reporters control human, JSON, NDJSON, or trace output.
 
-This document records the CLI surface and the KISS choices behind it. **Specs, planner, and runner orchestration are explicitly out of scope** for this round; the CLI accepts a single goal string and runs it through the executor.
+This document records the CLI surface and the KISS choices behind it. **Specs and planner orchestration are explicitly out of scope** for this round; the CLI accepts a single goal string and runs it through the public runner.
 
 ---
 
@@ -18,7 +18,7 @@ Built incrementally; the v1 CLI surface is live.
 - **Milestone 2 — Config layering** [done]. `src/config.js` reads `~/.config/qagent/config.json` (user, XDG-style) and `./qagent.config.json` (project, cwd-only, no walk-up). Precedence per §3: flag > env > project > user. Hand-edited JSON; missing files = empty; malformed JSON = exit 2 with file path. Unknown keys are ignored on read and rejected on write. Recognized keys: `model`, `verifierModel`, `provider`, `apiKey`, `url`, `maxTurns`, `testTimeout`, `networkTimeout`, `actionTimeout`, `reporter`, `outputDir`, `headed`.
 - **Milestone 3 — `config` subcommand** [done]. `qagent config set [--project] <key> <value>` writes user config (default) or project config; only user config gets `0o600`. `qagent config list` prints all known keys with their effective value and source (env/project/user/default/unset) plus the file paths. `apiKey` is redacted in list output (`sk-or-...wxyz` form). Strict on writes (unknown key → exit 2; `maxTurns` must be a positive integer); lenient on reads. `qagent config --help` shows usage. Implementation lives in `src/config-cmd.js`; data-layer ops (load, write, path resolution) in `src/config.js`.
 - **Milestone 4 — Reporter system + `--headed` + config integration** [done]. Composable `--reporter=list,json,ndjson,trace` (default `list`); flag value replaces default rather than merging. `list` keeps the human progress + summary output unchanged; `json` dumps the full trace payload to stdout at end; `ndjson` streams `{event:"turn",...}` per executed turn followed by a `{event:"done",goal,outcome,turns,elapsedMs,cost,...}` envelope; `trace` writes to `results/<iso>.json` (or `--output-dir <path>`) and reports the path on **stderr** so machine-readable reporters keep stdout clean. `--headed` is wired through `launchPage` (`headless: !headed`).
-- **Provider abstraction + Pi-dev auth prep** [done]. `provider` selects the real model provider (default `openrouter`), top-4 provider env vars are supported, and `src/llm-auth.js` lets a future Pi package pass `{ apiKey, headers }` without inventing `provider=pi`.
+- **Provider abstraction + Pi-dev auth prep** [done]. `provider` selects the real model provider (default `openrouter`), top-4 provider env vars are supported, and `src/runner.js` plus `src/llm-auth.js` let a Pi package pass `{ apiKey, headers }` without inventing `provider=pi`.
 - **Agent ergonomics.** The `done` envelope event shipped in M4's ndjson reporter. There is no separate print mode in the current CLI surface.
 
 ---
@@ -62,7 +62,7 @@ qagent --url https://signup.example.com "User can sign up with email"
 qagent --url https://aida.de "User can browse ships" --headed
 ```
 
-No spec files, no directories of specs, no multi-goal batches in v1. Spec format and the planner come later; this CLI is the thin shell over `runTodo()`.
+No spec files, no directories of specs, no multi-goal batches in v1. Spec format and the planner come later; this CLI is the thin shell over `runQAgent()`.
 
 A separate `config` subcommand handles read/write of the user and project config files (covered in §3 below). This isn't "modes for running tests" — it's the sibling utility every CLI of this shape ships (`git config`, `npm config`, `gh config`, `pi config`).
 

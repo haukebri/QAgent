@@ -14,7 +14,7 @@ Do not use QAgent's standalone API-key config from the Pi-dev package. The stand
 qagent --provider anthropic --model claude-sonnet-4-5 --api-key sk-ant-... --url <url> "<goal>"
 ```
 
-The Pi-dev wrapper should instead call QAgent internals and pass:
+The Pi-dev wrapper should instead call QAgent's public runner and pass:
 
 - `model`: `ctx.model` by default, or `ctx.modelRegistry.find(provider, modelId)` when the user explicitly overrides it.
 - `resolveRequestAuth(model)`: a small adapter around `ctx.modelRegistry.getApiKeyAndHeaders(model)` that returns `{ apiKey, headers }`.
@@ -65,9 +65,7 @@ Do not include API keys, auth headers, raw model registry responses, or full sna
 This is the shape the future wrapper repo should use. Exact Pi package registration code can change, but the QAgent side should stay close to this.
 
 ```js
-import { launchPage } from "@qagent/cli/src/browser.js";
-import { runTodo } from "@qagent/cli/src/executor.js";
-import { navigate } from "@qagent/cli/src/tools.js";
+import { runQAgent } from "@qagent/cli/src/runner.js";
 
 export async function runQAgentWithPi(ctx, input) {
   const {
@@ -107,71 +105,49 @@ export async function runQAgentWithPi(ctx, input) {
     return { apiKey: auth.apiKey, headers: auth.headers };
   };
 
-  const { startUrl, httpCredentials } = parseStartUrl(url);
   const turns = [];
   const onTurn = (turn) => turns.push(turn);
 
-  let browser;
-  try {
-    const launched = await launchPage({ httpCredentials, headed });
-    browser = launched.browser;
-    const page = launched.page;
+  const result = await runQAgent({
+    url,
+    goal,
+    model,
+    resolveRequestAuth,
+    verifierModel,
+    maxTurns,
+    headed,
+    testTimeoutMs,
+    networkTimeoutMs,
+    actionTimeoutMs,
+    onTurn,
+  });
 
-    await navigate(page, startUrl, networkTimeoutMs);
-    const result = await runTodo(
-      page,
-      goal,
-      model,
-      resolveRequestAuth,
-      maxTurns,
-      verifierModel,
-      onTurn,
-      testTimeoutMs,
-      actionTimeoutMs,
-    );
-
-    return {
-      outcome: result.outcome,
-      evidence: result.evidence,
-      turns: result.turns,
-      elapsedMs: result.elapsedMs,
-      cost: (result.tokens?.cost ?? 0) + (result.verifierTokens?.cost ?? 0),
-      url: startUrl,
-      turnLog: turns.map((t) => ({
-        turn: t.turn,
-        action: t.action,
-        target: t.target,
-        error: t.error,
-        url: t.url,
-      })),
-    };
-  } finally {
-    await browser?.close();
-  }
-}
-
-function parseStartUrl(rawUrl) {
-  const parsed = new URL(rawUrl);
-  const httpCredentials = parsed.username
-    ? {
-        username: decodeURIComponent(parsed.username),
-        password: decodeURIComponent(parsed.password),
-      }
-    : undefined;
-
-  parsed.username = "";
-  parsed.password = "";
-  return { startUrl: parsed.toString(), httpCredentials };
+  return {
+    outcome: result.outcome,
+    evidence: result.evidence,
+    turns: result.turns,
+    elapsedMs: result.elapsedMs,
+    cost: (result.tokens?.cost ?? 0) + (result.verifierTokens?.cost ?? 0),
+    url: result.finalUrl,
+    turnLog: turns.map((t) => ({
+      turn: t.turn,
+      action: t.action,
+      target: t.target,
+      error: t.error,
+      url: t.url,
+    })),
+  };
 }
 ```
 
 Important details:
 
-- The wrapper calls `runTodo()` directly. It should not spawn `qagent` if the goal is to use Pi-dev authentication, because the current CLI resolves auth from QAgent config/env.
+- The wrapper calls `runQAgent()` directly. It should not spawn `qagent` if the goal is to use Pi-dev authentication, because the CLI resolves auth from QAgent config/env.
+- The wrapper should not import `browser.js`, `tools.js`, `executor.js`, `verifier.js`, or `reporters.js`; QAgent owns browser launch, pre-navigation, execution, verification, cleanup, and runtime error shaping.
 - `resolveRequestAuth` is called by both driver and verifier LLM calls.
 - The wrapper should pass the actual `Model` object to QAgent, not a provider string.
 - If Pi returns an auth failure, fail early with a clear message. Do not fall back to `QAGENT_API_KEY`; that would hide broken Pi integration.
-- Basic auth embedded in the URL should be stripped before navigation and passed as Playwright `httpCredentials`, matching the CLI behavior.
+- Basic auth embedded in the URL is stripped by `runQAgent()` before navigation and passed as Playwright `httpCredentials`, matching the CLI behavior.
 
 ## Manual test plan
 
@@ -210,9 +186,7 @@ ANTHROPIC_API_KEY=sk-ant-... \
 node --input-type=module <<'JS'
 import http from "node:http";
 import { getModel } from "@earendil-works/pi-ai";
-import { launchPage } from "./src/browser.js";
-import { runTodo } from "./src/executor.js";
-import { navigate } from "./src/tools.js";
+import { runQAgent } from "./src/runner.js";
 
 const provider = process.env.QAGENT_PROVIDER ?? "anthropic";
 const modelId = process.env.QAGENT_MODEL ?? "claude-sonnet-4-5";
@@ -250,26 +224,22 @@ const resolveRequestAuth = async (requestedModel) => {
   return { apiKey: auth.apiKey, headers: auth.headers };
 };
 
-let browser;
 try {
-  const launched = await launchPage({ headed: false });
-  browser = launched.browser;
-  await navigate(launched.page, url, 30000);
-  const result = await runTodo(
-    launched.page,
-    "Click Continue and verify the page says Pi wrapper success.",
-    ctx.model,
+  const result = await runQAgent({
+    url,
+    goal: "Click Continue and verify the page says Pi wrapper success.",
+    model: ctx.model,
     resolveRequestAuth,
-    8,
-    ctx.model,
-    (turn) => console.log(JSON.stringify({ event: "turn", ...turn })),
-    120000,
-    2000,
-  );
+    verifierModel: ctx.model,
+    maxTurns: 8,
+    testTimeoutMs: 120000,
+    networkTimeoutMs: 30000,
+    actionTimeoutMs: 2000,
+    onTurn: (turn) => console.log(JSON.stringify({ event: "turn", ...turn })),
+  });
   console.log(JSON.stringify({ event: "done", outcome: result.outcome, evidence: result.evidence, turns: result.turns }));
   process.exitCode = result.outcome === "pass" ? 0 : 1;
 } finally {
-  await browser?.close();
   server.close();
 }
 JS

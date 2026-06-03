@@ -28,6 +28,7 @@
     "src/providers.js",
     "src/recorder.js",
     "src/reporters.js",
+    "src/runner.js",
     "src/snapshot-compress.js",
     "src/tools.js",
     "src/verifier.js"

@@ -17,7 +17,7 @@ For a QAgent package, Pi is best treated as an auth/model runtime, not as an LLM
 
 1. Keep the standalone CLI path API-key based for npm users.
 2. Keep `--provider` meaning the model provider; do not overload it with `pi`.
-3. Add a Pi extension/package wrapper later that calls QAgent internals directly and supplies:
+3. Add a Pi extension/package wrapper later that calls `runQAgent()` from `@qagent/cli/src/runner.js` and supplies:
    - `model`: `ctx.model` by default, or `ctx.modelRegistry.find(provider, modelId)` for overrides.
    - `resolveRequestAuth(model)`: call `ctx.modelRegistry.getApiKeyAndHeaders(model)`, throw or surface the error when `ok` is false, and return `{ apiKey, headers }` when it succeeds.
 4. If a CLI flag is needed for a spawned command, prefer `--auth-source pi` or `--auth pi` over `--provider pi`.
@@ -25,6 +25,6 @@ For a QAgent package, Pi is best treated as an auth/model runtime, not as an LLM
 
 ## Prep Done Here
 
-The driver and verifier now accept a request-auth resolver via `src/llm-auth.js`. The standalone CLI still resolves one API key exactly as before, but internally the LLM call path can now carry both `apiKey` and `headers`, which matches the successful result of Pi's `getApiKeyAndHeaders()` contract.
+The driver and verifier now accept a request-auth resolver via `src/llm-auth.js`, and `src/runner.js` exposes the browser orchestration boundary the Pi package should call. The standalone CLI still resolves one API key exactly as before, but internally the LLM call path can now carry both `apiKey` and `headers`, which matches the successful result of Pi's `getApiKeyAndHeaders()` contract.
 
 See `docs/pi-dev-wrapper-usage.md` for the proposed wrapper contract and manual smoke-test plan.

@@ -4,16 +4,25 @@ AI-driven QA testing. Browser is driven by script. LLM is the decider.
 
 ## modules
 
-QAgent is currently a single-goal CLI. There is no spec planner or runner layer
-in the shipped package; `cli.js` is the top-level orchestrator.
+QAgent is currently a single-goal CLI with a public runner API. There is no spec
+planner layer in the shipped package; `runner.js` is the browser orchestration
+boundary used by both the CLI and package integrations.
 
 ### cli.js
 
 Entry point for `qagent`. Parses argv, dispatches `qagent config`, layers
-flag/env/project/user config, resolves provider/model/API-key values, strips
-basic-auth credentials from the start URL, creates reporters, launches the
-browser, pre-navigates to the URL, calls `runTodo()`, and maps the result to an
-exit code.
+flag/env/project/user config, resolves provider/model/API-key values, creates
+reporters, calls `runQAgent()`, and maps the result to an exit code.
+
+### runner.js
+
+Public package boundary for running one goal. Exports `runQAgent({ url, goal,
+model, resolveRequestAuth, verifierModel, maxTurns, headed, testTimeoutMs,
+networkTimeoutMs, actionTimeoutMs, onStart, onTurn })`. It validates and
+normalizes the URL, strips basic-auth credentials into Playwright
+`httpCredentials`, launches and closes the browser, pre-navigates to the URL,
+calls `runTodo()`, and shapes runtime/pre-navigation crashes into stable result
+objects.
 
 ### browser.js
 
@@ -28,7 +37,8 @@ ladder below.
 Browser surface. `observe(page)` returns Playwright's ai-mode ariaSnapshot YAML
 with refs baked in as `[ref=eN]`. `click`, `fill`, `selectOption`, `pressKey`,
 and `type` resolve refs via `aria-ref=${ref}` and mutate the page. `navigate` is
-used by `cli.js` for setup/pre-navigation; it is not exposed as a driver action.
+used by `runner.js` for setup/pre-navigation; it is not exposed as a driver
+action.
 
 ### executor.js
 
@@ -48,8 +58,8 @@ executor freezes state and passes it in.
 ### llm-auth.js
 
 Adapts pi-ai streaming to QAgent's auth boundary. The standalone CLI supplies
-`{ apiKey }`; a future Pi package can supply `{ apiKey, headers }` from Pi's
-model registry.
+`{ apiKey }`; a Pi package can supply `{ apiKey, headers }` from Pi's model
+registry.
 
 ### providers.js
 
@@ -84,6 +94,7 @@ trace payload and writes `results/*.json` for the `trace` reporter.
 ```
 CLI goal + URL
   -> config/provider/API-key resolution
+  -> public runner
   -> browser launch + pre-navigate
   -> executor loop: observe/settle -> LLM JSON action -> local tool
   -> verifier judges final state

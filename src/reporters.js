@@ -126,6 +126,7 @@ function ndjsonReporter() {
         verifierTokens,
         totalTokens: driverTokens + verifierTokens,
         finalUrl: result.finalUrl,
+        finalScreenshot: result.finalScreenshot,
         warnings: result.warnings ?? [],
       };
       process.stdout.write(JSON.stringify(envelope) + '\n');

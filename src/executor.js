@@ -67,6 +67,7 @@ export async function runTodo(
   onTurn = null,
   testTimeoutMs = 300_000,
   actionTimeoutMs = 2_000,
+  evidenceRecorder = null,
 ) {
   const t0 = Date.now();
 
@@ -195,7 +196,7 @@ export async function runTodo(
         const llmEntry = { turn: turns, atMs: Date.now() - t0, error: fatalError, url };
         if (usage) llmEntry.tokens = stepTokens(usage);
         history.push(llmEntry);
-        onTurn?.(llmEntry);
+        await onTurn?.(llmEntry);
         break;
       }
 
@@ -204,7 +205,7 @@ export async function runTodo(
         const parseEntry = { turn: turns, atMs: Date.now() - t0, error: lastError, url };
         if (usage) parseEntry.tokens = stepTokens(usage);
         history.push(parseEntry);
-        onTurn?.(parseEntry);
+        await onTurn?.(parseEntry);
         continue;
       }
 
@@ -250,7 +251,7 @@ export async function runTodo(
           }
           if (usage) rejEntry.tokens = stepTokens(usage);
           history.push(rejEntry);
-          onTurn?.(rejEntry);
+          await onTurn?.(rejEntry);
           break;
         }
 
@@ -261,7 +262,7 @@ export async function runTodo(
         }
         if (usage) doneEntry.tokens = stepTokens(usage);
         history.push(doneEntry);
-        onTurn?.(doneEntry);
+        await onTurn?.(doneEntry);
         break;
       }
 
@@ -295,7 +296,7 @@ export async function runTodo(
         }
         if (usage) verdictEntry.tokens = stepTokens(usage);
         history.push(verdictEntry);
-        onTurn?.(verdictEntry);
+        await onTurn?.(verdictEntry);
         break;
       }
 
@@ -304,7 +305,7 @@ export async function runTodo(
           lastError = `ref ${action.ref} is not present in the current snapshot; pick a ref from the latest snapshot above`;
           const refMissEntry = { turn: turns, atMs: Date.now() - t0, action, url, error: lastError };
           history.push(refMissEntry);
-          onTurn?.(refMissEntry);
+          await onTurn?.(refMissEntry);
           continue;
         }
 
@@ -324,7 +325,7 @@ export async function runTodo(
           };
           if (usage) stuckEntry.tokens = stepTokens(usage);
           history.push(stuckEntry);
-          onTurn?.(stuckEntry);
+          await onTurn?.(stuckEntry);
           break;
         }
       }
@@ -335,6 +336,7 @@ export async function runTodo(
         const target = labelForRef(snapshot, action.ref);
         if (target) entry.target = target;
       }
+      await addStepScreenshot(entry, evidenceRecorder, page);
       const tAction = Date.now();
       try {
         let recoveredVia = null;
@@ -349,7 +351,7 @@ export async function runTodo(
         entry.url = page.url();
         if (recoveredVia) entry.recoveredVia = recoveredVia;
         history.push(entry);
-        onTurn?.(entry);
+        await onTurn?.(entry);
         lastError = null;
       } catch (err) {
         const msg = err.message.split('\n')[0];
@@ -357,7 +359,7 @@ export async function runTodo(
         entry.url = page.url();
         entry.error = msg;
         history.push(entry);
-        onTurn?.(entry);
+        await onTurn?.(entry);
         lastError = msg;
       }
       if (REF_ACTIONS.has(action.action) && action.ref) {
@@ -406,6 +408,7 @@ export async function runTodo(
 
   const finalUrl = page.url();
   const elapsedMs = Date.now() - t0;
+  const finalScreenshot = await evidenceRecorder?.captureFinal(page);
 
   if (fatalError !== null) {
     const failureScreenshot = await captureScreenshot(page);
@@ -416,6 +419,7 @@ export async function runTodo(
       turns, elapsedMs,
       tokens, verifierTokens: null,
       finalUrl, finalSnapshot, failureScreenshot,
+      ...(finalScreenshot ? { finalScreenshot } : {}),
       history, warnings,
     };
   }
@@ -460,6 +464,7 @@ export async function runTodo(
     turns, elapsedMs,
     tokens, verifierTokens,
     finalUrl, finalSnapshot, failureScreenshot,
+    ...(finalScreenshot ? { finalScreenshot } : {}),
     history, warnings,
   };
 }
@@ -498,6 +503,11 @@ function stepTokens(usage) {
 
 async function captureScreenshot(page) {
   return page.screenshot({ fullPage: true }).catch(() => null);
+}
+
+async function addStepScreenshot(entry, evidence, page) {
+  const screenshot = await evidence?.captureStep(page, entry.turn);
+  if (screenshot) entry.screenshot = screenshot;
 }
 
 function labelForRef(snapshot, ref) {

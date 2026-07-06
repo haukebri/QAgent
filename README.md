@@ -233,6 +233,7 @@ Strategy:
 | Run one goal locally | `qagent --url <url> "<goal>"` |
 | Stream events to an AI agent | `qagent --url <url> "<goal>" --reporter=ndjson` |
 | Save a JSON trace file | `qagent --url <url> "<goal>" --reporter=trace` |
+| Save screenshot evidence | `qagent --url <url> "<goal>" --evidence-dir ./evidence` |
 | Watch the browser | `qagent --url <url> "<goal>" --headed` |
 
 ---
@@ -247,6 +248,8 @@ Strategy:
 | `trace` | Writes `results/<YYYY-MM-DDTHH-MM>H<HASH>.json` (path overridable with `--output-dir`); confirmation goes to **stderr** so machine-readable reporters keep stdout clean |
 
 Compose with a comma: `--reporter=list,trace`. Default is `list`.
+
+Screenshot evidence is separate from reporters: pass `--evidence-dir <path>` to write viewport JPEGs (`step-03.jpg`, `final.jpg`) no matter which reporter is enabled. Step screenshots show the page before that step's action is executed; `final.jpg` shows the final page state.
 
 ---
 
@@ -301,6 +304,7 @@ One CLI call. The verdict comes back as a short structured envelope the next age
   "target": "Sign in",             // string, optional — human label resolved from ref (click | fill)
   "url": "https://.../page",       // string, page URL after the action
   "ms": 180,                       // number, browser-action duration; absent for ref-miss errors
+  "screenshot": "step-01.jpg",     // string, optional — relative to --evidence-dir
   "error": "ref e87 not in snapshot"  // string, present only when the action errored
 }
 
@@ -319,6 +323,7 @@ One CLI call. The verdict comes back as a short structured envelope the next age
   "verifierTokens": 320,           // number, verifier total tokens (0 if verifier didn't run)
   "totalTokens": 1744,             // number, driverTokens + verifierTokens
   "finalUrl": "https://...",       // string
+  "finalScreenshot": "final.jpg",  // string, optional — relative to --evidence-dir
   "warnings": []                   // string[], may include verifier-fallback notices; often empty
 }
 ```
@@ -331,6 +336,7 @@ Pipe-friendly recipes:
 qagent --url <url> "<goal>" --reporter=ndjson | jq -c .                 # consume the full event stream
 qagent --url <url> "<goal>" --reporter=ndjson | tail -1 | jq -r .outcome  # just pass / fail / error
 qagent --url <url> "<goal>" --reporter=ndjson,trace                     # stream + persist trace file
+qagent --url <url> "<goal>" --reporter=list --evidence-dir ./evidence   # save screenshots without NDJSON
 ```
 
 Stderr stays clean — only the trace reporter writes its path confirmation there, so piping stdout into `jq` always works.
@@ -368,6 +374,7 @@ Run options:
   --action-timeout <s>    Per click/fill in seconds; doubles as blocked-element detector (default 2)
   --reporter <list>       Comma-separated: list,json,ndjson,trace (default list)
   --output-dir <path>     Where trace files land (default results/)
+  --evidence-dir <path>   Save per-step and final viewport JPEG screenshots
   --headed                Show the browser window
 
 Config subcommands:

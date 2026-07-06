@@ -28,6 +28,7 @@ Options:
   --action-timeout <s>   Per click/fill in seconds; doubles as blocked-element detector (default 2)
   --reporter <list>      Comma-separated: list,json,ndjson,trace (default list)
   --output-dir <path>    Where trace files land (default results/, used with trace)
+  --evidence-dir <path>  Save per-step and final screenshots there
   --headed               Show browser window
   --version, -v          Print version
   --help, -h             Print this help
@@ -51,6 +52,7 @@ const VALUE_FLAGS = {
   '--action-timeout': 'actionTimeout',
   '--reporter': 'reporter',
   '--output-dir': 'outputDir',
+  '--evidence-dir': 'evidenceDir',
 };
 
 const TIMEOUT_FLAGS = new Set(['testTimeout', 'networkTimeout', 'actionTimeout']);
@@ -174,6 +176,7 @@ async function main() {
     }
   }
   const outputDir = flags.outputDir ?? project.outputDir ?? user.outputDir ?? 'results';
+  const evidenceDir = flags.evidenceDir ?? null;
   const headed = flags.headed ?? project.headed ?? user.headed ?? false;
 
   const model = getModel(provider, modelId);
@@ -188,7 +191,7 @@ async function main() {
     for (const r of reporters) await r.onStart?.(ctx);
   };
   const onTurn = reporters.some((r) => r.onTurn)
-    ? (h) => { for (const r of reporters) r.onTurn?.(h); }
+    ? async (h) => { for (const r of reporters) await r.onTurn?.(h); }
     : null;
 
   const result = await runQAgent({
@@ -202,6 +205,7 @@ async function main() {
     testTimeoutMs: testTimeoutSec * 1000,
     networkTimeoutMs: networkTimeoutSec * 1000,
     actionTimeoutMs: actionTimeoutSec * 1000,
+    evidenceDir,
     onStart,
     onTurn,
   });
@@ -236,12 +240,13 @@ function resolveTimeout(flagVal, envVal, projectVal, userVal, defaultSec, envNam
 }
 
 try {
-  process.exit(await main());
+  process.exitCode = await main();
 } catch (err) {
   if (err instanceof ConfigError) {
     process.stderr.write(`qagent: ${err.message}\n`);
-    process.exit(2);
+    process.exitCode = 2;
+  } else {
+    process.stderr.write(`qagent: ${err.message}\n`);
+    process.exitCode = 3;
   }
-  process.stderr.write(`qagent: ${err.message}\n`);
-  process.exit(3);
 }

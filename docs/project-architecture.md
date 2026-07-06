@@ -18,7 +18,7 @@ reporters, calls `runQAgent()`, and maps the result to an exit code.
 
 Public package boundary for running one goal. Exports `runQAgent({ url, goal,
 model, resolveRequestAuth, verifierModel, maxTurns, headed, testTimeoutMs,
-networkTimeoutMs, actionTimeoutMs, onStart, onTurn })`. It validates and
+networkTimeoutMs, actionTimeoutMs, evidenceDir, onStart, onTurn })`. It validates and
 normalizes the URL, strips basic-auth credentials into Playwright
 `httpCredentials`, launches and closes the browser, pre-navigates to the URL,
 calls `runTodo()`, and shapes runtime/pre-navigation crashes into stable result
@@ -46,7 +46,9 @@ Driver loop for one goal. It observes and settles the page, compresses snapshots
 against a baseline, asks the driver LLM for one JSON action through
 `pi-agent-core`, executes the local Playwright action, records history, detects
 repeated no-progress actions, and exits on `done`, `fail`, stuck, timeout, or
-turn cap. The final outcome is still decided by `verifier.js`.
+turn cap. When `evidenceDir` is set, it saves viewport JPEGs before executed
+browser actions and once at the final page state. The final outcome is still
+decided by `verifier.js`.
 
 ### verifier.js
 

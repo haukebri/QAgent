@@ -22,6 +22,7 @@
     "src/cli.js",
     "src/config-cmd.js",
     "src/config.js",
+    "src/evidence.js",
     "src/executor.js",
     "src/llm-auth.js",
     "src/observe-settle.js",
@@ -37,7 +38,7 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "test": "echo \"No tests configured\""
+    "test": "node --test"
   },
   "keywords": [],
   "dependencies": {

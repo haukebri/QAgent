@@ -46,6 +46,7 @@ export function buildPayload(goal, modelId, verifierModelId, result) {
     llmVerdict: { reason: result.llmVerdict?.reason ?? null },
     evidence: result.evidence ?? null,
     finalUrl: result.finalUrl,
+    finalScreenshot: result.finalScreenshot,
     stats: {
       turns: result.turns,
       elapsedSec: toSec(result.elapsedMs),

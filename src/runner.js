@@ -1,5 +1,6 @@
 import { launchPage } from './browser.js';
 import { ConfigError } from './config.js';
+import { createEvidenceRecorder } from './evidence.js';
 import { runTodo } from './executor.js';
 import { navigate } from './tools.js';
 
@@ -14,6 +15,7 @@ export async function runQAgent({
   testTimeoutMs = 300_000,
   networkTimeoutMs = 30_000,
   actionTimeoutMs = 2_000,
+  evidenceDir = null,
   onStart = null,
   onTurn = null,
 } = {}) {
@@ -25,6 +27,7 @@ export async function runQAgent({
   }
 
   const { startUrl, httpCredentials } = parseStartUrl(url);
+  const evidence = createEvidenceRecorder(evidenceDir, { maxTurns });
   await onStart?.({ url: startUrl });
   const tRun = Date.now();
   let browser;
@@ -36,20 +39,20 @@ export async function runQAgent({
     try {
       await navigate(page, startUrl, networkTimeoutMs);
     } catch (err) {
-      result = buildErrorResult(err, page, tRun, 'pre-navigate failed');
+      result = await buildErrorResult(err, page, tRun, evidence, 'pre-navigate failed');
     }
     if (!result) {
       try {
         result = await runTodo(
           page, goal, model, resolveRequestAuth, maxTurns, verifierModel, onTurn,
-          testTimeoutMs, actionTimeoutMs,
+          testTimeoutMs, actionTimeoutMs, evidence,
         );
       } catch (err) {
-        result = buildErrorResult(err, page, tRun);
+        result = await buildErrorResult(err, page, tRun, evidence);
       }
     }
   } catch (err) {
-    result = buildErrorResult(err, page, tRun);
+    result = await buildErrorResult(err, page, tRun, evidence);
   } finally {
     await browser?.close();
   }
@@ -80,7 +83,8 @@ function parseStartUrl(rawUrl) {
   };
 }
 
-function buildErrorResult(err, page, startedAt, prefix = 'runner crashed') {
+async function buildErrorResult(err, page, startedAt, evidence, prefix = 'runner crashed') {
+  const finalScreenshot = await evidence?.captureFinal(page);
   return {
     outcome: 'error',
     evidence: `${prefix}: ${err.message.split('\n')[0]}`,
@@ -90,6 +94,7 @@ function buildErrorResult(err, page, startedAt, prefix = 'runner crashed') {
     tokens: { input: 0, output: 0, totalTokens: 0, cost: 0 },
     verifierTokens: null,
     finalUrl: page?.url?.() ?? 'about:blank',
+    ...(finalScreenshot ? { finalScreenshot } : {}),
     history: [],
     warnings: [],
   };

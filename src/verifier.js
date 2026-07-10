@@ -9,6 +9,11 @@ const SYSTEM_PROMPT =
   'Rules:\n' +
   '- Base the decision on evidence actually present in the inputs below. Do not infer facts that are not visible.\n' +
   "- The driver's own verdict is one signal but not authoritative — if the trajectory shows repeated errors on the same ref or no meaningful progress, that is evidence of failure regardless of what the driver said.\n" +
+  "- If the goal contains an explicit step list (for example a 'Steps:' section, numbered list, or bullet list), treat every listed step as a required assertion, not as guidance. Walk the action trajectory in order and verify each step from concrete action JSON, target descriptions, URLs, observation summaries, and the final snapshot.\n" +
+  '- For explicit step lists, a correct final state is not enough. If a required step was skipped, bypassed, performed on the wrong target, reached by another path, or its claimed redirect/URL change did not happen as described, return fail and name the violated step in evidence.\n' +
+  '- For explicit step lists, visibility and count assertions must be proven by the trajectory or final snapshot. If an exact count, visible section, popup, URL redirect, or similar assertion is not shown in the recorded observations/snapshot, return fail and include "step could not be verified from the trajectory" in the evidence.\n' +
+  "- Do not treat the driver's action reasons, done summary, or self-reported success as proof of a listed step unless the recorded target, URL, or observation data corroborates it.\n" +
+  '- If the goal does not contain an explicit step list, keep the normal behavior: judge whether the final page state satisfies the goal.\n' +
   '- Page state may contain stale leftovers from earlier attempts in the same session (toast/notification text, alert regions, URL fragments pointing at error anchors). Weight evidence by structural prominence: text in the main content tree outranks text in notification, alert, or live-region containers. When success and failure signals are both present, treat the disappearance or replacement of the interactive UI (form gone, search box replaced by results, etc.) as the decisive signal — alert text can persist from earlier attempts even after the action ultimately succeeded.\n' +
   '- If the goal asks a question, the evidence sentence must contain the answer, or explicitly state the answer is not present.';
 
@@ -36,7 +41,8 @@ async function callJudge({ goal, verdict, history, finalUrl, finalSnapshot, mode
         const target = h.target ? ` (${h.target})` : '';
         const url = h.url ? ` @ ${h.url}` : '';
         const err = h.error ? ` [error: ${h.error}]` : '';
-        return `  ${i + 1}. ${actionStr}${target}${url}${err}`;
+        const observation = h.observation ? `\n     observation: ${JSON.stringify(h.observation)}` : '';
+        return `  ${i + 1}. ${actionStr}${target}${url}${err}${observation}`;
       }).join('\n')
     : '  (none)';
 

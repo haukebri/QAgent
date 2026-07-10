@@ -267,7 +267,7 @@ qagent config list                # show effective values + their sources
 qagent config --help              # all keys, types, defaults, valid values
 ```
 
-Recognized keys: `model`, `verifierModel`, `provider`, `apiKey`, `url`, `maxTurns`, `testTimeout`, `networkTimeout`, `actionTimeout`, `reporter`, `outputDir`, `headed`.
+Recognized keys: `model`, `verifierModel`, `provider`, `apiKey`, `url`, `locale`, `maxTurns`, `testTimeout`, `networkTimeout`, `actionTimeout`, `reporter`, `outputDir`, `headed`.
 
 ---
 
@@ -368,6 +368,7 @@ Run options:
   --verifier-model <id>   Verifier model (defaults to --model)
   --provider <name>       LLM provider (default openrouter)
   --api-key <key>         Provider API key
+  --locale <tag>          Browser locale, e.g. de-DE
   --max-turns <n>         Turn cap (default 50)
   --test-timeout <s>      Wall-clock loop budget in seconds; verifier still runs after (default 300)
   --network-timeout <s>   Per page.goto, in seconds (default 30)
@@ -383,7 +384,7 @@ Config subcommands:
   qagent config --help
 
 Environment:
-  QAGENT_URL, QAGENT_PROVIDER, QAGENT_API_KEY, QAGENT_MODEL
+  QAGENT_URL, QAGENT_PROVIDER, QAGENT_API_KEY, QAGENT_MODEL, QAGENT_LOCALE
   ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY  (per-provider fallbacks)
   QAGENT_TEST_TIMEOUT, QAGENT_NETWORK_TIMEOUT, QAGENT_ACTION_TIMEOUT  (seconds)
 

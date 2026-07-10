@@ -11,9 +11,10 @@ function localTimezone() {
   return Intl.DateTimeFormat().resolvedOptions().timeZone;
 }
 
-export async function launchPage({ httpCredentials, headed = false } = {}) {
+export async function launchPage({ httpCredentials, headed = false, locale } = {}) {
   const args = ['--disable-blink-features=AutomationControlled'];
   const headless = !headed;
+  const defaultLocale = locale ?? 'en-US';
   let browser;
   try {
     browser = await chromium.launch({ channel: 'chrome', args, headless });
@@ -22,15 +23,21 @@ export async function launchPage({ httpCredentials, headed = false } = {}) {
   }
   const context = await browser.newContext({
     userAgent: USER_AGENT,
-    locale: 'en-US',
+    locale: defaultLocale,
     timezoneId: localTimezone(),
     viewport: { width: 1366, height: 820 },
     ...(httpCredentials ? { httpCredentials } : {}),
   });
-  await context.addInitScript(() => {
-    Object.defineProperty(navigator, 'webdriver', { get: () => false });
-    Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-  });
+  if (locale) {
+    await context.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => false });
+    });
+  } else {
+    await context.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => false });
+      Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+    });
+  }
   const page = await context.newPage();
   return { browser, page };
 }

@@ -15,7 +15,7 @@ This document records the CLI surface and the KISS choices behind it. **Specs an
 Built incrementally; the v1 CLI surface is live.
 
 - **Milestone 1 — Bare binary** [done] (commit `8a358ed`). `qagent "<goal>"` runs the executor end-to-end with `--model` / `--verifier-model` / `--api-key` / `--max-turns` / `--headed` / `--version` / `--help` flags. Reads `QAGENT_MODEL`, `QAGENT_API_KEY`, and provider-specific key env vars. Exit codes 0/1/2/3. **No trace file by default.** Unknown flags warn but don't crash. `bin: { qagent: "src/cli.js" }` in `package.json`.
-- **Milestone 2 — Config layering** [done]. `src/config.js` reads `~/.config/qagent/config.json` (user, XDG-style) and `./qagent.config.json` (project, cwd-only, no walk-up). Precedence per §3: flag > env > project > user. Hand-edited JSON; missing files = empty; malformed JSON = exit 2 with file path. Unknown keys are ignored on read and rejected on write. Recognized keys: `model`, `verifierModel`, `provider`, `apiKey`, `url`, `maxTurns`, `testTimeout`, `networkTimeout`, `actionTimeout`, `reporter`, `outputDir`, `headed`.
+- **Milestone 2 — Config layering** [done]. `src/config.js` reads `~/.config/qagent/config.json` (user, XDG-style) and `./qagent.config.json` (project, cwd-only, no walk-up). Precedence per §3: flag > env > project > user. Hand-edited JSON; missing files = empty; malformed JSON = exit 2 with file path. Unknown keys are ignored on read and rejected on write. Recognized keys: `model`, `verifierModel`, `provider`, `apiKey`, `url`, `locale`, `maxTurns`, `testTimeout`, `networkTimeout`, `actionTimeout`, `reporter`, `outputDir`, `headed`.
 - **Milestone 3 — `config` subcommand** [done]. `qagent config set [--project] <key> <value>` writes user config (default) or project config; only user config gets `0o600`. `qagent config list` prints all known keys with their effective value and source (env/project/user/default/unset) plus the file paths. `apiKey` is redacted in list output (`sk-or-...wxyz` form). Strict on writes (unknown key → exit 2; `maxTurns` must be a positive integer); lenient on reads. `qagent config --help` shows usage. Implementation lives in `src/config-cmd.js`; data-layer ops (load, write, path resolution) in `src/config.js`.
 - **Milestone 4 — Reporter system + `--headed` + config integration** [done]. Composable `--reporter=list,json,ndjson,trace` (default `list`); flag value replaces default rather than merging. `list` keeps the human progress + summary output unchanged; `json` dumps the full trace payload to stdout at end; `ndjson` streams `{event:"turn",...}` per executed turn followed by a `{event:"done",goal,outcome,turns,elapsedMs,cost,...}` envelope; `trace` writes to `results/<iso>.json` (or `--output-dir <path>`) and reports the path on **stderr** so machine-readable reporters keep stdout clean. `--headed` is wired through `launchPage` (`headless: !headed`).
 - **Provider abstraction + Pi-dev auth prep** [done]. `provider` selects the real model provider (default `openrouter`), top-4 provider env vars are supported, and `src/runner.js` plus `src/llm-auth.js` let a Pi package pass `{ apiKey, headers }` without inventing `provider=pi`.
@@ -71,7 +71,7 @@ A separate `config` subcommand handles read/write of the user and project config
 **Resolution order** (highest priority first):
 
 1. **CLI flags** — `--model`, `--api-key`, etc.
-2. **Env vars** — `QAGENT_PROVIDER`, `QAGENT_API_KEY`, per-provider fallback (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`), `QAGENT_MODEL`
+2. **Env vars** — `QAGENT_PROVIDER`, `QAGENT_API_KEY`, per-provider fallback (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`), `QAGENT_MODEL`, `QAGENT_LOCALE`
 3. **Project config** — `./qagent.config.json` in cwd (optional)
 4. **User config** — `~/.config/qagent/config.json` (optional, but the typical setup)
 5. **Built-in defaults**
@@ -206,6 +206,7 @@ Run options:
   --verifier-model <id>     Verifier model (defaults to --model)
   --api-key <key>           Provider API key (prefer env or user config)
   --provider <name>         LLM provider (default openrouter)
+  --locale <tag>            Browser locale, e.g. de-DE
   --max-turns <n>           Turn cap (default 50)
   --test-timeout <s>        Wall-clock loop budget in seconds (default 300)
   --network-timeout <s>     Per page.goto timeout in seconds (default 30)
@@ -226,6 +227,7 @@ Environment:
   QAGENT_PROVIDER           LLM provider (default openrouter)
   QAGENT_API_KEY            Preferred env var (any provider)
   QAGENT_MODEL              Driver model id
+  QAGENT_LOCALE             Browser locale, e.g. de-DE
   OPENROUTER_API_KEY        Per-provider fallback when provider=openrouter
   ANTHROPIC_API_KEY         Per-provider fallback when provider=anthropic
   OPENAI_API_KEY            Per-provider fallback when provider=openai

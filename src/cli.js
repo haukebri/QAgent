@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getModel } from '@earendil-works/pi-ai';
-import { ConfigError, loadConfig } from './config.js';
+import { ConfigError, loadConfig, validateLocale } from './config.js';
 import { runConfigCommand } from './config-cmd.js';
 import { resolveApiKey } from './providers.js';
 import { KNOWN_REPORTERS, selectReporters } from './reporters.js';
@@ -22,6 +22,7 @@ Options:
   --verifier-model <id>  Verifier model (defaults to --model)
   --provider <name>      LLM provider (default openrouter; or env QAGENT_PROVIDER)
   --api-key <key>        Provider API key (or env QAGENT_API_KEY / provider-specific env)
+  --locale <tag>         Browser locale, e.g. de-DE (or env QAGENT_LOCALE / config "locale")
   --max-turns <n>        Turn cap (default 50)
   --test-timeout <s>     Wall-clock loop budget in seconds; verifier still runs after (default 300)
   --network-timeout <s>  Per page.goto, in seconds (default 30)
@@ -34,7 +35,7 @@ Options:
   --help, -h             Print this help
 
 Environment:
-  QAGENT_URL, QAGENT_PROVIDER, QAGENT_API_KEY, QAGENT_MODEL
+  QAGENT_URL, QAGENT_PROVIDER, QAGENT_API_KEY, QAGENT_MODEL, QAGENT_LOCALE
   ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY  (per-provider fallbacks)
   QAGENT_TEST_TIMEOUT, QAGENT_NETWORK_TIMEOUT, QAGENT_ACTION_TIMEOUT  (seconds)
 
@@ -46,6 +47,7 @@ const VALUE_FLAGS = {
   '--verifier-model': 'verifierModel',
   '--provider': 'provider',
   '--api-key': 'apiKey',
+  '--locale': 'locale',
   '--max-turns': 'maxTurns',
   '--test-timeout': 'testTimeout',
   '--network-timeout': 'networkTimeout',
@@ -159,6 +161,7 @@ async function main() {
   const verifierModelId =
     flags.verifierModel ?? project.verifierModel ?? user.verifierModel ?? modelId;
   const maxTurns = flags.maxTurns ?? project.maxTurns ?? user.maxTurns ?? 50;
+  const locale = resolveLocale(flags.locale, process.env.QAGENT_LOCALE, project.locale, user.locale);
 
   const testTimeoutSec = resolveTimeout(
     flags.testTimeout, process.env.QAGENT_TEST_TIMEOUT, project.testTimeout, user.testTimeout, 300, 'QAGENT_TEST_TIMEOUT', 'testTimeout',
@@ -185,7 +188,7 @@ async function main() {
   if (!verifierModel) throw new ConfigError(`unknown verifier model "${verifierModelId}" for provider "${provider}"`);
 
   const reporters = selectReporters(reporterNames, { outputDir });
-  const ctx = { goal, modelId, verifierModelId, url: rawUrl };
+  const ctx = { goal, modelId, verifierModelId, locale: locale ?? null, url: rawUrl };
   const onStart = async ({ url }) => {
     ctx.url = url;
     for (const r of reporters) await r.onStart?.(ctx);
@@ -202,6 +205,7 @@ async function main() {
     verifierModel,
     maxTurns,
     headed,
+    locale,
     testTimeoutMs: testTimeoutSec * 1000,
     networkTimeoutMs: networkTimeoutSec * 1000,
     actionTimeoutMs: actionTimeoutSec * 1000,
@@ -217,6 +221,18 @@ async function main() {
   if (result.outcome === 'pass') return 0;
   if (result.outcome === 'fail') return 1;
   return 3;
+}
+
+function resolveLocale(flagVal, envVal, projectVal, userVal) {
+  for (const [label, value] of [
+    ['--locale', flagVal],
+    ['QAGENT_LOCALE', envVal],
+    ['project config "locale"', projectVal],
+    ['user config "locale"', userVal],
+  ]) {
+    if (value !== undefined) return validateLocale(value, label);
+  }
+  return undefined;
 }
 
 function resolveTimeout(flagVal, envVal, projectVal, userVal, defaultSec, envName, configKey) {

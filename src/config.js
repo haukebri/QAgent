@@ -13,6 +13,7 @@ const KNOWN_KEYS = {
   provider: { type: 'string' },
   apiKey: { type: 'string' },
   url: { type: 'string' },
+  locale: { type: 'locale' },
   maxTurns: { type: 'number' },
   testTimeout: { type: 'seconds' },
   networkTimeout: { type: 'seconds' },
@@ -59,9 +60,22 @@ export function loadConfig({ cwd } = {}) {
   return { user, project };
 }
 
+export function validateLocale(value, label = 'locale') {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new ConfigError(`${label} must be a BCP-47 locale like "de-DE", got ${JSON.stringify(value)}`);
+  }
+  try {
+    Intl.getCanonicalLocales(value);
+  } catch {
+    throw new ConfigError(`${label} must be a BCP-47 locale like "de-DE", got ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
 function coerceValue(key, value) {
   const type = KNOWN_KEYS[key].type;
   if (type === 'string') return String(value);
+  if (type === 'locale') return validateLocale(String(value), key);
   if (type === 'number') {
     const n = Number(value);
     if (!Number.isInteger(n) || n <= 0) {

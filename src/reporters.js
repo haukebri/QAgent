@@ -96,7 +96,7 @@ function listReporter() {
 function jsonReporter() {
   return {
     onEnd(result, ctx) {
-      const payload = buildPayload(ctx.goal, ctx.modelId, ctx.verifierModelId, result);
+      const payload = buildPayload(ctx.goal, ctx.modelId, ctx.verifierModelId, result, ctx.locale);
       process.stdout.write(JSON.stringify(payload) + '\n');
     },
   };
@@ -137,7 +137,7 @@ function ndjsonReporter() {
 function traceReporter(outputDir) {
   return {
     async onEnd(result, ctx) {
-      const path = await record(ctx.goal, ctx.modelId, ctx.verifierModelId, result, outputDir);
+      const path = await record(ctx.goal, ctx.modelId, ctx.verifierModelId, result, outputDir, ctx.locale);
       process.stderr.write(`trace: ${path}\n`);
     },
   };

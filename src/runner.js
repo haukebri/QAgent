@@ -12,6 +12,7 @@ export async function runQAgent({
   verifierModel = model,
   maxTurns = 50,
   headed = false,
+  locale,
   testTimeoutMs = 300_000,
   networkTimeoutMs = 30_000,
   actionTimeoutMs = 2_000,
@@ -35,7 +36,7 @@ export async function runQAgent({
   let result;
 
   try {
-    ({ browser, page } = await launchPage({ httpCredentials, headed }));
+    ({ browser, page } = await launchPage({ httpCredentials, headed, locale }));
     try {
       await navigate(page, startUrl, networkTimeoutMs);
     } catch (err) {

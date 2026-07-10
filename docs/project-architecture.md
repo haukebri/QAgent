@@ -17,7 +17,7 @@ reporters, calls `runQAgent()`, and maps the result to an exit code.
 ### runner.js
 
 Public package boundary for running one goal. Exports `runQAgent({ url, goal,
-model, resolveRequestAuth, verifierModel, maxTurns, headed, testTimeoutMs,
+model, resolveRequestAuth, verifierModel, maxTurns, headed, locale, testTimeoutMs,
 networkTimeoutMs, actionTimeoutMs, evidenceDir, onStart, onTurn })`. It validates and
 normalizes the URL, strips basic-auth credentials into Playwright
 `httpCredentials`, launches and closes the browser, pre-navigates to the URL,
@@ -26,9 +26,9 @@ objects.
 
 ### browser.js
 
-Browser lifecycle. Exports `launchPage({ httpCredentials, headed })`, opens
-Chrome with bundled Chromium fallback, applies stealth defaults (UA, locale,
-local timezone, viewport, webdriver/languages init script), and returns
+Browser lifecycle. Exports `launchPage({ httpCredentials, headed, locale })`, opens
+Chrome with bundled Chromium fallback, applies stealth defaults (UA, optional
+locale, local timezone, viewport, webdriver init script), and returns
 `{ browser, page }`. Single source of truth for the bot-detection escalation
 ladder below.
 
@@ -113,8 +113,8 @@ CLI goal + URL
 
 ## bot-detection escalation
 
-Default launch uses `channel: 'chrome'`, a realistic user-agent, locale, the
-host machine's timezone, viewport, and an init script that hides
+Default launch uses `channel: 'chrome'`, a realistic user-agent, optional locale,
+the host machine's timezone, viewport, and an init script that hides
 `navigator.webdriver`.
 This is enough for most sites (verified: aida.de Akamai, npmjs.com
 Cloudflare, google.com all pass).

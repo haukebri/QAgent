@@ -35,12 +35,13 @@ function transformStep(s) {
   return out;
 }
 
-export function buildPayload(goal, modelId, verifierModelId, result) {
+export function buildPayload(goal, modelId, verifierModelId, result, locale = null) {
   return {
     timestamp: new Date().toISOString(),
     goal,
     model: modelId,
     verifierModel: verifierModelId,
+    locale,
     outcome: result.outcome,
     reasoning: result.llmVerdict?.summary ?? null,
     llmVerdict: { reason: result.llmVerdict?.reason ?? null },
@@ -58,8 +59,8 @@ export function buildPayload(goal, modelId, verifierModelId, result) {
   };
 }
 
-export async function record(goal, modelId, verifierModelId, result, outDir = 'results') {
-  const payload = buildPayload(goal, modelId, verifierModelId, result);
+export async function record(goal, modelId, verifierModelId, result, outDir = 'results', locale = null) {
+  const payload = buildPayload(goal, modelId, verifierModelId, result, locale);
   const dir = resolve(outDir);
   await mkdir(dir, { recursive: true });
   const hash = randomBytes(2).toString('hex').toUpperCase();

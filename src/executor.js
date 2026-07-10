@@ -35,7 +35,8 @@ const SYSTEM_PROMPT =
   "NEVER call done if the URL still matches a login page, or if loading indicators/disabled submit buttons are visible. " +
   'Wait first, then re-check.\n\n' +
   'Pick "done" when the goal is clearly complete — include a "summary" that answers any question the goal asked for. ' +
-  'Pick "fail" when the goal is clearly impossible on this page/app — include a clear "reason". ' +
+  'If the current page does not match the goal, first try to recover: use "goBack" after a wrong click, or re-read the snapshot for the element you actually need. ' +
+  'Pick "fail" only when the goal is impossible and you have attempted recovery, or when no recovery action exists; include what you tried in the "reason". ' +
   "Don't fabricate: if you cannot literally verify what the goal asks for, use \"fail\".\n\n" +
   'Element heuristics: prefer refs labelled `link` (which show a `- /url: …` line) or ' +
   '`button`, `textbox`, `menuitem`. A `generic [cursor=pointer]` span is often a ' +

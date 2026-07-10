@@ -19,12 +19,24 @@ export function fingerprint(snapshot) {
 const QUOTED_NAME_RE = /^\s*-\s*\w+\s+"([^"]+)"/gm;
 const REF_RE = /\[ref=(e\d+)\]/g;
 const HEADING_RE = /^\s*-\s*heading\s+"([^"]+)"/m;
+const PROGRESSBAR_RE = /^\s*-\s*progressbar\b/im;
+const BUSY_ATTR_RE = /(?:^|\s)\[busy\](?=\s|:|$)|\baria-busy\b/i;
+const BUSY_NAME_RE = /^(?:loading(?:\.\.\.)?|lädt)$/iu;
 
 function extractQuotedNames(snapshot) {
   const out = new Set();
   if (!snapshot) return out;
   for (const m of snapshot.matchAll(QUOTED_NAME_RE)) out.add(m[1]);
   return out;
+}
+
+function isBusySnapshot(snapshot) {
+  if (!snapshot) return false;
+  if (PROGRESSBAR_RE.test(snapshot) || BUSY_ATTR_RE.test(snapshot)) return true;
+  for (const name of extractQuotedNames(snapshot)) {
+    if (BUSY_NAME_RE.test(name)) return true;
+  }
+  return false;
 }
 
 function extractRefs(snapshot) {
@@ -145,32 +157,35 @@ export async function observeWithSettle(page, prev, opts = {}) {
     for (const t of prevTexts) if (!sampleTexts.has(t)) return true;
     return false;
   };
+  const countsForStability = (sample) => !isBusySnapshot(sample.snapshot) && isDeparted(sample);
 
   const t0 = Date.now();
   let initialUrl = '';
   try { initialUrl = page.url(); } catch {}
   let last = await safeObserve(page);
   let settled = false;
-  let matchStreak = last.ok && isDeparted(last) ? 1 : 0;
+  let matchStreak = last.ok && countsForStability(last) ? 1 : 0;
 
   while (true) {
     if (matchStreak >= stableSamples) { settled = true; break; }
-    if (Date.now() - t0 >= maxSettleMs) break;
-    await sleep(pollMs);
+    const remainingMs = maxSettleMs - (Date.now() - t0);
+    if (remainingMs <= 0) break;
+    await sleep(Math.min(pollMs, remainingMs));
     const cur = await safeObserve(page);
     if (!cur.ok) break;
     if (!last.ok) {
       last = cur;
-      matchStreak = isDeparted(cur) ? 1 : 0;
+      matchStreak = countsForStability(cur) ? 1 : 0;
       continue;
     }
     if (cur.url === last.url && fingerprint(cur.snapshot) === fingerprint(last.snapshot)) {
       // Inter-sample stable. Grow streak only if departed from baseline;
       // otherwise we're stable on the LLM-seen state — keep polling.
-      if (isDeparted(cur)) matchStreak += 1;
+      if (countsForStability(cur)) matchStreak += 1;
+      else matchStreak = 0;
     } else {
       last = cur;
-      matchStreak = isDeparted(cur) ? 1 : 0;
+      matchStreak = countsForStability(cur) ? 1 : 0;
     }
   }
 

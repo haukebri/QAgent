@@ -43,3 +43,33 @@ test('busy settle timeout does not wait a full poll interval', async () => {
   assert.equal(result.settled, false);
   assert.ok(Date.now() - t0 < 500);
 });
+
+test('transient observation failure during navigation keeps polling', async () => {
+  const list = `- main [ref=e1]:
+  - link "Product teaser" [ref=e2]
+`;
+  const product = `- main [ref=e1]:
+  - heading "New product page" [ref=e2]
+`;
+  let calls = 0;
+  const page = {
+    url: () => calls >= 2 ? 'https://example.test/product' : 'https://example.test/list',
+    locator: () => ({
+      ariaSnapshot: async () => {
+        const call = calls++;
+        if (call === 1) throw new Error('execution context destroyed');
+        return call >= 2 ? product : list;
+      },
+    }),
+  };
+
+  const result = await observeWithSettle(page, {
+    previousSnapshot: list,
+    previousUrl: 'https://example.test/list',
+  }, { pollMs: 0, maxSettleMs: 1000 });
+
+  assert.equal(result.settled, true);
+  assert.equal(result.snapshot, product);
+  assert.equal(result.url, 'https://example.test/product');
+  assert.deepEqual(result.addedText, ['New product page']);
+});

@@ -130,8 +130,9 @@ async function safeObserve(page) {
 // consecutive samples, or `maxSettleMs` elapses. Returns the latest sample plus
 // the structured diff against `previousSnapshot` / `previousUrl`.
 //
-// Never throws: a Playwright failure inside the loop returns settled=false with
-// whatever sample we last successfully captured.
+// Never throws: a Playwright failure inside the loop is treated as an in-flight
+// transition; if observations do not recover by the deadline, returns
+// settled=false with whatever sample we last successfully captured.
 export async function observeWithSettle(page, prev, opts = {}) {
   const pollMs = opts.pollMs ?? 150;
   const stableSamples = opts.stableSamples ?? 2;
@@ -172,7 +173,10 @@ export async function observeWithSettle(page, prev, opts = {}) {
     if (remainingMs <= 0) break;
     await sleep(Math.min(pollMs, remainingMs));
     const cur = await safeObserve(page);
-    if (!cur.ok) break;
+    if (!cur.ok) {
+      matchStreak = 0;
+      continue;
+    }
     if (!last.ok) {
       last = cur;
       matchStreak = countsForStability(cur) ? 1 : 0;

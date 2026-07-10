@@ -27,11 +27,12 @@ Steps:
 5. Finally a confirmation message like "Thank you for your project inquiry!" is shown'
 
 AIDA_URL='https://aida.de/buchen/CO10260728/PREMIUM/meine-reise/reisende?adults=2&juveniles=0&children=0&babies=0&cabin=M'
-AIDA_GOAL='Goal: As a user in the AIDA booking process (premium cruise, 2 adults, cabin preselected) I fill in the traveler data and reach the insurance step where insurance options with prices are shown.
+AIDA_GOAL='Goal: As a user in the AIDA booking process (premium cruise, 2 adults) I select a cabin tariff, fill in the traveler data, and reach the insurance step where insurance options with prices are shown.
 Steps:
-- The booking page opens on the traveler data step; dismiss any cookie/consent dialog that appears
-- Fill all required traveler fields for both adults with plausible random data (names, birth dates, contact details)
+- The booking page opens on the tariff selection in the cabin section; dismiss any cookie/consent dialog that appears
+- Select a tariff for the cabin via its "Auswählen" button. Note: this may open a price panel that blocks other elements - close or complete it before interacting with anything behind it
 - If a travel-option choice is offered, pick the individual option (labelled "Individuell" or similar)
+- Fill all required traveler fields for both adults with plausible random data (names, birth dates, contact details)
 - Continue to the next step. If a panel or overlay blocks a click, close or complete it first instead of retrying the same click
 - Continue until the insurance step is shown, where insurance options and their prices are visible'
 

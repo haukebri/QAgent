@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Agent } from '@earendil-works/pi-agent-core';
 import { streamWithRequestAuth } from './llm-auth.js';
-import { observe, click, fill, selectOption, pressKey, type } from './tools.js';
+import { observe, click, fill, selectOption, pressKey, type, goBack } from './tools.js';
 import { verify } from './verifier.js';
 import { compressAgainstBaseline } from './snapshot-compress.js';
 import { observeWithSettle, observeForVerdict, diffSnapshots, compactObservation, formatPreviousActionResult } from './observe-settle.js';
@@ -17,7 +17,7 @@ const STUCK_THRESHOLD = 3;
 const SYSTEM_PROMPT =
   'You plan one browser action at a time toward a goal. Respond with a single JSON object and nothing else (no markdown fences, no commentary).\n\n' +
   'Schema:\n' +
-  '  { "action": "click" | "fill" | "selectOption" | "pressKey" | "type" | "wait" | "done" | "fail",\n' +
+  '  { "action": "click" | "fill" | "selectOption" | "pressKey" | "type" | "goBack" | "wait" | "done" | "fail",\n' +
   '    "ref"?: string, "value"?: string | string[], "key"?: string, "ms"?: number, "summary"?: string, "reason"?: string }\n\n' +
   'Examples:\n' +
   '  {"action": "click", "ref": "e6"}\n' +
@@ -27,6 +27,7 @@ const SYSTEM_PROMPT =
   '  {"action": "pressKey", "key": "Enter"}\n' +
   '  {"action": "pressKey", "ref": "e15", "key": "ArrowDown"}\n' +
   '  {"action": "type", "ref": "e15", "value": "Springfi"}\n' +
+  '  {"action": "goBack"}\n' +
   '  {"action": "wait", "ms": 1500}\n' +
   '  {"action": "done", "summary": "There are 42 projects."}\n' +
   '  {"action": "fail", "reason": "The admin page shows counts only; no user list is rendered."}\n\n' +
@@ -43,6 +44,7 @@ const SYSTEM_PROMPT =
   'in `Added:` and no URL change, those are the new menu items; look for them in the ' +
   'snapshot below instead of re-clicking the same ref.\n\n' +
   'Form submits or other actions might take extra time to complete. Use the `wait` tool to wait for the action to complete before re-checking.\n\n' +
+  'goBack — return to the previous page, e.g. after clicking a wrong link.\n\n' +
   'Form-tool heuristics: ' +
   'Use `selectOption` for `combobox` refs whose YAML lists `option` children — these are native `<select>` dropdowns. ' +
   'Pass the visible option label as `value` (e.g. "Frau"); for `<select multiple>` pass an array of labels. ' +
@@ -345,6 +347,7 @@ export async function runTodo(
         else if (action.action === 'selectOption') recoveredVia = await selectOption(page, action.ref, action.value, actionTimeoutMs);
         else if (action.action === 'pressKey') recoveredVia = await pressKey(page, action.ref, action.key, actionTimeoutMs);
         else if (action.action === 'type') recoveredVia = await type(page, action.ref, action.value, actionTimeoutMs);
+        else if (action.action === 'goBack') recoveredVia = await goBack(page);
         else if (action.action === 'wait') await page.waitForTimeout(action.ms ?? 1000);
         else throw new Error(`unknown action: ${action.action}`);
         entry.ms = Date.now() - tAction;

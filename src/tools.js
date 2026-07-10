@@ -188,6 +188,17 @@ export async function type(page, ref, value, actionTimeoutMs) {
   return await actOrDescribe(locator, 'type', () => locator.pressSequentially(value, { timeout: actionTimeoutMs }), actionTimeoutMs);
 }
 
+export async function goBack(page) {
+  const beforeUrl = page.url();
+  const beforeSnapshot = await observe(page).catch(() => null);
+  const response = await page.goBack({ waitUntil: 'load' });
+  if (response === null && page.url() === beforeUrl) {
+    const afterSnapshot = await observe(page).catch(() => null);
+    if (afterSnapshot === beforeSnapshot) throw new Error('goBack had no effect');
+  }
+  return null;
+}
+
 // waitUntil: 'load' (not 'networkidle' — Playwright discourages it; chatty
 // pages with analytics/polling rarely settle). 'load' fires when the doc and
 // its sub-resources are loaded; the executor's post-action settle loop in

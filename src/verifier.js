@@ -25,7 +25,11 @@ const DECOMPOSE_PROMPT =
   '- Use one claim per distinct requirement: navigation happened, an element was visible, a URL was reached, or an action had an effect.\n' +
   '- Prefer roughly one claim per user-stated step or sentence.\n' +
   '- If one step says an element is visible/clickable and that click redirects, opens a popup, or changes the page, keep that interaction and effect together as one claim.\n' +
+  '- For form-fill steps that list multiple named fields or options, split each named field/option into its own claim.\n' +
   '- Split a step only when it contains independent requirements that can be checked separately.\n' +
+  '- Conditional or iterative steps ("if errors occur", "retry until", "eventual") must become outcome claims that direct success also satisfies. Example: "Check for form errors, correct them, resubmit until the result page appears" -> "the result page was eventually reached; if validation errors occurred along the way, they were corrected" — NOT "the form was submitted repeatedly".\n' +
+  '- Do not create separate claims requiring retries, repeated submissions, or error correction unless the goal requires them even when the success state is reached immediately.\n' +
+  '- For until-success recovery clauses, never include "repeatedly", "again", or "resubmit" in the claim unless repetition is required even after the success state is reached.\n' +
   '- A claim must be verifiable in principle from a browser session transcript.\n' +
   "- Copy the user's wording closely.\n" +
   "- Do not invent requirements that are not in the goal.\n" +
@@ -37,12 +41,22 @@ const CHECK_PROMPT =
   '  { "verdict": "yes" | "no" | "unknown",\n' +
   '    "evidence": "<one sentence citing concrete actions, targets, URLs, observations, or final snapshot text>" }\n\n' +
   'Rules:\n' +
-  '- Answer "yes" only when concrete transcript evidence proves the claim.\n' +
-  '- Never answer "yes" without pointing to concrete evidence from the transcript.\n' +
-  '- Answer "no" when the transcript contradicts the claim, skips a required action, uses a different required path, reaches the wrong URL, or shows the required effect did not happen.\n' +
+  '- "yes" = the transcript contains concrete evidence FOR the claim; quote that evidence.\n' +
+  '- "no" = the transcript contains concrete evidence AGAINST the claim; quote that evidence. Absence of mention is NEVER "no".\n' +
+  '- For form-field claims, concrete evidence AGAINST means the same field has a conflicting value or a validation error remains for that field. Another field\'s name/value, "not a field named", or "no field labeled" is not evidence against the claim.\n' +
+  '- "unknown" = the transcript neither confirms nor contradicts the claim.\n' +
+  '- If your evidence would say "does not show", "no mention of", "does not confirm", "does not provide a count", "does not provide a way to verify", "not fully enumerated", "not confirmed as complete", "unclear", "not a field named", "no field named", "there is no field labeled", or similar, the verdict must be "unknown", not "no", even if the claim was required.\n' +
+  '- Use "no" only when the transcript contradicts the claim, shows a different required path, reaches the wrong URL, or shows the required effect did not happen.\n' +
   '- When a claim names a required route or source context such as a teaser, section, popup, button, or link, verify that route/context itself. Reaching the same final product, URL, or page by search results or a different page is "no".\n' +
   '- A claim about clicking a teaser is not satisfied by clicking a matching product link from search results.\n' +
   '- For exact count claims, count only the named item type. Do not count CTA, navigation, category, or "show all" links as offers/products. If the transcript is ambiguous, answer "unknown" rather than "no".\n' +
+  '- For exact count claims, "no" requires a concrete extra or missing named item in the same named section and same observation. Possible hidden/available items or missing confirmation of exactness are "unknown".\n' +
+  '- A "show all" CTA, possible hidden items, or lack of an explicit total is not evidence against an exact visible count.\n' +
+  '- For exact visible counts in a named section, judge the observation where that section is shown. Later products on another page, after a redirect, or after "show more" are not evidence against the earlier section count.\n' +
+  '- For exact visible counts in a named section, ignore products, categories, or offers outside that named section, even when they are elsewhere on the same page or in a larger surrounding page section.\n' +
+  '- If an exact count claim has two matching items but uncertainty about page or section context, answer "unknown", not "no".\n' +
+  '- For form-field claims, inspect all fill/select/click actions. A successful submit/result page is evidence that mandatory fields were accepted, and another field\'s label/value is not a contradiction. A clicked checkbox/radio option can satisfy a requested option even when the surrounding field label is absent. Label mismatch or missing proof that an option was first is "unknown" unless the transcript shows a conflicting value for that same field.\n' +
+  '- For transient states such as a popup, dialog, toast, overlay, or loading indicator, any observation in the trajectory can satisfy the claim, even if the final snapshot no longer shows it. addedText with dialog buttons is evidence FOR the transient state; for example, after "In den Warenkorb", addedText ["Weiter einkaufen", "Zur Kasse"] evidences a cart popup/overlay. Judging only the final snapshot is wrong for these claims.\n' +
   '- Answer "unknown" when the transcript does not contain enough information to verify the claim.\n' +
   '- If in doubt, answer "unknown".\n' +
   "- The driver's action reasons, done summary, or self-reported success are not proof unless action targets, URLs, observations, or final snapshot corroborate them.";

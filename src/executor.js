@@ -35,6 +35,7 @@ const SYSTEM_PROMPT =
   "NEVER call done if the URL still matches a login page, or if loading indicators/disabled submit buttons are visible. " +
   'Wait first, then re-check.\n\n' +
   'Pick "done" when the goal is clearly complete — include a "summary" that answers any question the goal asked for. ' +
+  'Before choosing done, re-read the most recent observation. If it contains error, validation, or failure messages related to your goal, the task is NOT done — resolve them (fix fields, resubmit, dismiss and retry) instead. Your done summary must not contradict the observation. ' +
   'If the current page does not match the goal, first try to recover: use "goBack" after a wrong click, or re-read the snapshot for the element you actually need. ' +
   'Pick "fail" only when the goal is impossible and you have attempted recovery, or when no recovery action exists; include what you tried in the "reason". ' +
   "Don't fabricate: if you cannot literally verify what the goal asks for, use \"fail\".\n\n" +
@@ -59,6 +60,18 @@ const SYSTEM_PROMPT =
   'A user message beginning "Baseline anchor (turn N)." is a pinned reference snapshot kept in full. ' +
   'In the latest snapshot, a section body may read "# unchanged since turn N" — that section is byte-identical to the baseline anchor\'s, ' +
   'so its refs are the SAME numbers as in the anchor. Look up element details there.';
+
+const DONE_CHECK_PROMPT =
+  'You are a QA verifier. Decide whether a browser driver\'s done summary is contradicted by the final observation.\n\n' +
+  'Respond with a single JSON object and nothing else (no markdown fences, no commentary):\n' +
+  '  { "contradicted": true | false, "reason": "<one sentence citing concrete observation text when contradicted>" }\n\n' +
+  'Rules:\n' +
+  '- Base the decision only on the supplied goal, driver summary, final URL, and observation JSON.\n' +
+  '- The observation JSON may include `mostRecentBeforeDone` and `terminalAfterDone`; inspect the addedText/removedText fields in both.\n' +
+  "- Ask explicitly: does the final observation contradict the driver's success summary (e.g. visible error or validation messages)?\n" +
+  '- If the observation shows the goal still failed, still needs correction, or still displays a validation/submission failure related to the goal, return contradicted=true.\n' +
+  '- If contradicted=true, the reason must quote or name the concrete observation text.\n' +
+  '- If the observation is merely incomplete or ambiguous, return contradicted=false.';
 
 export async function runTodo(
   page,
@@ -237,7 +250,22 @@ export async function runTodo(
           // either way.
         }
 
-        const doneProblem = findBlockingPriorError({ history, warnings, turns });
+        let doneProblem = findBlockingPriorError({ history, warnings, turns });
+        if (!doneProblem) {
+          const doneCheck = await checkDoneContradiction({
+            goal,
+            summary: action.summary ?? '',
+            finalUrl: page.url(),
+            observation: {
+              mostRecentBeforeDone: observation ? compactObservation(observation) : prev?.actionEntry?.observation ?? null,
+              terminalAfterDone: terminalObs ? compactObservation(terminalObs) : null,
+            },
+            model,
+            resolveRequestAuth,
+          });
+          if (doneCheck.usage) addTokenUsage(tokens, doneCheck.usage);
+          doneProblem = doneCheck.problem;
+        }
         if (doneProblem) {
           // Terminate the run as fail — no retry, no cap-bypass. The verifier
           // still runs at the end of runTodo against finalSnapshot.
@@ -480,6 +508,49 @@ export async function runTodo(
   };
 }
 
+export async function checkDoneContradiction({ goal, summary, finalUrl, observation, model, resolveRequestAuth }) {
+  const agent = new Agent({
+    initialState: { systemPrompt: DONE_CHECK_PROMPT, model },
+    streamFn: streamWithRequestAuth(resolveRequestAuth),
+  });
+
+  await agent.prompt(
+    `Goal: ${goal}\n\n` +
+    `Driver done summary: ${summary || '(none)'}\n\n` +
+    `Final URL: ${finalUrl}\n\n` +
+    `Final observation JSON:\n${JSON.stringify(observation, null, 2)}\n\n` +
+    'Your JSON:',
+  );
+
+  const last = [...agent.state.messages].reverse().find(m => m.role === 'assistant');
+  const usage = last?.usage ?? null;
+  if (!last) throw new Error('no assistant message returned by done check LLM');
+  const errorMessage = last?.errorMessage ?? agent.state.errorMessage;
+  if (last?.stopReason === 'error' || errorMessage) {
+    throw new Error(errorMessage ?? 'provider returned an error stop reason');
+  }
+  const content = Array.isArray(last?.content) ? last.content : [];
+  const text = content.filter(c => c.type === 'text').map(c => c.text).join('');
+  const jsonStr = extractActionJson(text);
+  if (!jsonStr) throw new Error(`no JSON in done check response: ${text.slice(0, 200)}`);
+
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonStr);
+  } catch (err) {
+    throw new Error(`${err.message}; raw: ${jsonStr.slice(0, 200)}`);
+  }
+  if (typeof parsed.contradicted !== 'boolean') {
+    throw new Error(`invalid done check contradicted value: ${parsed.contradicted}`);
+  }
+  if (!parsed.contradicted) return { problem: null, usage };
+
+  const reason = typeof parsed.reason === 'string' && parsed.reason.trim()
+    ? parsed.reason.trim()
+    : 'the final observation contradicts the driver success summary';
+  return { problem: `Your done summary contradicts the final observation: ${reason}`, usage };
+}
+
 export function findBlockingPriorError({ history, warnings, turns }) {
   for (let i = history.length - 1; i >= 0; i--) {
     const entry = history[i];
@@ -499,6 +570,15 @@ export function findBlockingPriorError({ history, warnings, turns }) {
     break;
   }
   return null;
+}
+
+function addTokenUsage(tokens, usage) {
+  tokens.input += usage.input ?? 0;
+  tokens.output += usage.output ?? 0;
+  tokens.cacheRead += usage.cacheRead ?? 0;
+  tokens.cacheWrite += usage.cacheWrite ?? 0;
+  tokens.totalTokens += usage.totalTokens ?? 0;
+  tokens.cost += usage.cost?.total ?? 0;
 }
 
 function stepTokens(usage) {

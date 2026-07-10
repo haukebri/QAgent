@@ -29,6 +29,14 @@ export async function observe(page) {
 async function diagnoseClickFailure(locator) {
   try {
     return await locator.evaluate(el => {
+      const clean = (value, max) => (value || '').replace(/\s+/g, ' ').trim().slice(0, max);
+      const visibleText = root =>
+        root.innerText ||
+        [...root.querySelectorAll('button, a, p, h1, h2, h3, h4, h5, h6, li, label, [role="heading"]')]
+          .map(node => node.innerText)
+          .filter(Boolean)
+          .join(' ') ||
+        root.textContent;
       const r = el.getBoundingClientRect();
       if (r.width === 0 || r.height === 0) return { kind: 'hidden', detail: '0×0' };
       const cx = r.x + r.width / 2;
@@ -58,16 +66,49 @@ async function diagnoseClickFailure(locator) {
         if (rootNode === document || !rootNode.host) break;
         report = rootNode.host;
       }
+      const controlSelector = 'button, a, [role="button"], [role="link"], [onclick], [tabindex]';
+      const hasControls = node => node.querySelector(controlSelector);
+      while (!hasControls(report) && report.parentElement && report.parentElement !== document.body) {
+        const parentStyle = window.getComputedStyle(report.parentElement);
+        if (!hasControls(report.parentElement) && parentStyle.position !== 'fixed' && parentStyle.position !== 'sticky') break;
+        report = report.parentElement;
+      }
       const id = report.id ? `#${report.id}` : '';
       const cls =
         typeof report.className === 'string' && report.className.trim()
           ? '.' + report.className.trim().split(/\s+/)[0]
           : '';
-      return { kind: 'overlay', detail: `${report.tagName.toLowerCase()}${id}${cls}` };
+      const scope = report.shadowRoot || report;
+      const controls = [...scope.querySelectorAll(controlSelector)]
+        .map(control => clean(
+          control.getAttribute('aria-label') ||
+          control.getAttribute('title') ||
+          control.getAttribute('alt') ||
+          control.getAttribute('name') ||
+          control.value ||
+          control.innerText ||
+          control.textContent,
+          80,
+        ))
+        .filter(Boolean)
+        .slice(0, 5);
+      return {
+        kind: 'overlay',
+        detail: `${report.tagName.toLowerCase()}${id}${cls}`,
+        text: clean(visibleText(scope), 200),
+        controls,
+      };
     });
   } catch {
     return null;
   }
+}
+
+function overlayErrorMessage(diag) {
+  if (!diag?.text && !diag?.controls?.length) return `click blocked by overlay: ${diag.detail}`;
+  const text = diag.text ? ` "${diag.text}${diag.text.length >= 200 ? '...' : ''}"` : '';
+  const buttons = diag.controls?.length ? ` (buttons: ${diag.controls.map((name) => `"${name}"`).join(', ')})` : '';
+  return `click blocked by overlay${text}${buttons} [${diag.detail}]. Interact with the overlay first — click one of its buttons or a close control — or pick a different target.`;
 }
 
 // Styled-radio / styled-checkbox pattern: native input is hidden (0×0 or
@@ -138,7 +179,7 @@ async function actOrDescribe(locator, verb, action, actionTimeoutMs) {
         throw new Error(`click target is hidden (${diag.detail}); no clickable ancestor found`);
       }
       if (diag?.kind === 'overlay') {
-        throw new Error(`click blocked by overlay: ${diag.detail}`);
+        throw new Error(overlayErrorMessage(diag));
       }
       throw err;
     }

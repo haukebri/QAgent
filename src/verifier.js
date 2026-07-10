@@ -77,12 +77,26 @@ export async function verify(goal, verdict, history, finalUrl, finalSnapshot, mo
       checks.push({ claim, verdict: checked.verdict, evidence: checked.evidence });
     }
 
-    return { ...aggregateChecks(checks), checks, tokens };
+    return { ...aggregateChecks(checks), checks, verifierMode: 'checks', tokens };
   } catch (err) {
     addTokens(tokens, err.tokens);
-    const fallback = await callSingleJudgeWithRetry(args);
-    addTokens(tokens, fallback.tokens);
-    return { ...fallback, checks: [], warnings: [], tokens };
+    const warning = 'verifier: claim decomposition failed, fell back to single-call verification' +
+      (err?.message ? `: ${err.message.split('\n')[0]}` : '');
+    try {
+      const fallback = await callSingleJudgeWithRetry(args);
+      addTokens(tokens, fallback.tokens);
+      return {
+        ...fallback,
+        checks: [],
+        verifierMode: 'single',
+        warnings: [...(fallback.warnings ?? []), warning],
+        tokens,
+      };
+    } catch (fallbackErr) {
+      fallbackErr.verifierMode = 'single';
+      fallbackErr.warnings = [...(fallbackErr.warnings ?? []), warning];
+      throw fallbackErr;
+    }
   }
 }
 

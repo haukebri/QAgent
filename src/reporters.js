@@ -125,6 +125,7 @@ function ndjsonReporter() {
         driverTokens,
         verifierTokens,
         totalTokens: driverTokens + verifierTokens,
+        verifierMode: result.verifierMode ?? null,
         finalUrl: result.finalUrl,
         finalScreenshot: result.finalScreenshot,
         checks: result.checks ?? [],

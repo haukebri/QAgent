@@ -41,6 +41,7 @@ export function buildPayload(goal, modelId, verifierModelId, result, locale = nu
     goal,
     model: modelId,
     verifierModel: verifierModelId,
+    verifierMode: result.verifierMode ?? null,
     locale,
     outcome: result.outcome,
     reasoning: result.llmVerdict?.summary ?? null,

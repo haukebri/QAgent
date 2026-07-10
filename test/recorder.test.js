@@ -14,7 +14,13 @@ test('records locale in trace payloads', () => {
     verifierTokens: null,
     history: [],
     warnings: [],
+    checks: [
+      { claim: 'claim one', verdict: 'yes', evidence: 'seen' },
+    ],
   }, 'de-DE');
 
   assert.equal(payload.locale, 'de-DE');
+  assert.deepEqual(payload.checks, [
+    { claim: 'claim one', verdict: 'yes', evidence: 'seen' },
+  ]);
 });

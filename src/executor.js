@@ -446,11 +446,14 @@ export async function runTodo(
 
   let outcome;
   let evidence;
+  let checks = [];
   let verifierTokens = null;
   try {
     const result = await verify(goal, verifierVerdict, history, finalUrl, finalSnapshot, judgeModel, resolveRequestAuth);
     outcome = result.outcome;
     evidence = result.evidence;
+    checks = result.checks ?? [];
+    warnings.push(...(result.warnings ?? []));
     verifierTokens = result.tokens;
   } catch (err) {
     const message = err.message.split('\n')[0];
@@ -469,7 +472,7 @@ export async function runTodo(
     tokens, verifierTokens,
     finalUrl, finalSnapshot, failureScreenshot,
     ...(finalScreenshot ? { finalScreenshot } : {}),
-    history, warnings,
+    history, warnings, checks,
   };
 }
 

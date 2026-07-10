@@ -46,6 +46,7 @@ export function buildPayload(goal, modelId, verifierModelId, result, locale = nu
     reasoning: result.llmVerdict?.summary ?? null,
     llmVerdict: { reason: result.llmVerdict?.reason ?? null },
     evidence: result.evidence ?? null,
+    checks: result.checks ?? [],
     finalUrl: result.finalUrl,
     finalScreenshot: result.finalScreenshot,
     stats: {

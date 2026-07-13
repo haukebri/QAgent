@@ -33,10 +33,14 @@ function fmtMs(ms) {
 }
 
 function describeAction(a, target) {
-  const tgt = target ? `"${target}"` : '';
+  const tgt = target || 'element';
   switch (a.action) {
     case 'click': return tgt;
-    case 'fill': return tgt ? `${tgt} = ${JSON.stringify(a.value ?? '')}` : `= ${JSON.stringify(a.value ?? '')}`;
+    case 'fill': return `${tgt} = ${JSON.stringify(a.value ?? '')}`;
+    case 'selectOption': return `${tgt} = ${JSON.stringify(a.value ?? '')}`;
+    case 'pressKey': return target ? `${a.key} on ${tgt}` : a.key;
+    case 'type': return `${JSON.stringify(a.value ?? '')} into ${tgt}`;
+    case 'goBack': return '';
     case 'wait': return `${a.ms ?? 1000}ms`;
     case 'done': return a.summary ? `"${a.summary}"` : '';
     case 'fail': return a.reason ? `"${a.reason}"` : '';

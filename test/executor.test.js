@@ -1,7 +1,25 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fauxAssistantMessage, registerFauxProvider } from '@earendil-works/pi-ai';
-import { checkDoneContradiction, runTodo } from '../src/executor.js';
+import { checkDoneContradiction, runTodo, toPublicStep } from '../src/executor.js';
+
+test('public steps replace ephemeral accessibility refs with target metadata', () => {
+  const step = toPublicStep({
+    turn: 1,
+    action: { action: 'click', ref: 'f1e23', reason: 'Click ref f1e23' },
+    target: 'button "Submit"',
+    locator: { playwright: 'page.getByRole("button", { name: "Submit", exact: true })', css: '#submit', frameUrl: null },
+    error: 'ref f1e23 is not present',
+    observation: { addedRefs: ['e1', 'f1e2'], removedRefs: ['e3'], addedText: ['Done'] },
+  });
+
+  assert.deepEqual(step.action, { action: 'click', reason: 'Click selected element' });
+  assert.equal(step.error, 'selected element is not present');
+  assert.equal(step.target, 'button "Submit"');
+  assert.equal(step.locator.css, '#submit');
+  assert.deepEqual(step.observation, { addedText: ['Done'], addedElementsCount: 2, removedElementsCount: 1 });
+  assert.doesNotMatch(JSON.stringify(step), /\b(?:f\d+)?e\d+\b/);
+});
 
 test('done contradiction check includes latest addedText and rejects contradicted summary', async () => {
   const faux = registerFauxProvider();

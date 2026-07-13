@@ -19,6 +19,145 @@ export async function observe(page) {
   return await page.locator('body').ariaSnapshot({ mode: 'ai' });
 }
 
+export async function inspectTarget(page, ref, snapshot) {
+  if (!ref) return { target: 'element', locator: { playwright: null, css: null, frameUrl: null } };
+  const locator = page.locator(`aria-ref=${ref}`);
+  const semantic = semanticTarget(snapshot, ref);
+  try {
+    const dom = await locator.evaluate(el => {
+      const clean = (value, max = 120) => (value || '').replace(/\s+/g, ' ').trim().slice(0, max);
+      const attr = name => clean(el.getAttribute(name));
+      const labels = el.labels ? [...el.labels].map(label => clean(label.innerText)).filter(Boolean) : [];
+      const inputText = ['button', 'submit', 'reset'].includes(el.type) ? clean(el.value) : '';
+      const fallbackName = labels[0] || attr('aria-label') || attr('title') || attr('placeholder') ||
+        attr('alt') || clean(el.innerText) || inputText;
+
+      let context = null;
+      for (let node = el.parentElement; node && node !== document.body; node = node.parentElement) {
+        if (!node.matches('dialog, [role="dialog"], fieldset, form, section, article, [role="region"], [role="group"]')) continue;
+        const labelledBy = node.getAttribute('aria-labelledby');
+        const labelledText = labelledBy
+          ? labelledBy.split(/\s+/).map(id => document.getElementById(id)?.textContent).filter(Boolean).join(' ')
+          : '';
+        const heading = node.matches('fieldset')
+          ? node.querySelector(':scope > legend')
+          : node.querySelector('h1, h2, h3, h4, h5, h6, [role="heading"]');
+        const name = clean(node.getAttribute('aria-label') || labelledText || heading?.textContent)
+          .replace(/(\S)\(/g, '$1 (');
+        if (name && name !== fallbackName) {
+          const role = node.getAttribute('role') || node.localName;
+          context = { role, name };
+          break;
+        }
+      }
+
+      const quote = value => `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+      const candidates = [];
+      for (const name of ['data-testid', 'data-test', 'data-qa']) {
+        const value = el.getAttribute(name);
+        if (value) candidates.push(`[${name}=${quote(value)}]`);
+      }
+      if (el.id) candidates.push(`#${CSS.escape(el.id)}`);
+      for (const name of ['name', 'aria-label', 'placeholder']) {
+        const value = el.getAttribute(name);
+        if (value) candidates.push(`${el.localName}[${name}=${quote(value)}]`);
+      }
+      if (el.localName === 'a' && el.getAttribute('href')) {
+        candidates.push(`a[href=${quote(el.getAttribute('href'))}]`);
+      }
+
+      return {
+        tag: el.localName,
+        type: attr('type') || null,
+        fallbackName,
+        labels,
+        testId: attr('data-testid') || null,
+        context,
+        css: candidates.find(candidate => {
+          try { return document.querySelectorAll(candidate).length === 1; } catch { return false; }
+        }) || null,
+        frameUrl: window === window.top ? null : location.href,
+      };
+    });
+
+    const role = semantic?.role || inferRole(dom.tag, dom.type);
+    const name = semantic?.name || dom.fallbackName || null;
+    const base = name
+      ? `${role} ${JSON.stringify(name)}`
+      : role !== 'generic' ? role : dom.type ? `${dom.tag}[type=${JSON.stringify(dom.type)}]` : dom.tag;
+    const target = dom.context
+      ? `${base} in ${dom.context.role} ${JSON.stringify(dom.context.name)}`
+      : base;
+
+    let scope = page;
+    let prefix = 'page';
+    if (dom.frameUrl) {
+      const frames = page.frames().filter(frame => frame !== page.mainFrame() && frame.url() === dom.frameUrl);
+      scope = frames.length === 1 ? frames[0] : null;
+      prefix = 'frame';
+    }
+
+    let playwright = null;
+    if (scope && name && role !== 'generic') {
+      try {
+        const candidate = scope.getByRole(role, { name, exact: true });
+        if (await candidate.count() === 1) {
+          playwright = `${prefix}.getByRole(${JSON.stringify(role)}, { name: ${JSON.stringify(name)}, exact: true })`;
+        }
+      } catch {}
+    }
+    if (!playwright && scope && dom.labels[0]) {
+      const label = dom.labels[0];
+      try {
+        if (await scope.getByLabel(label, { exact: true }).count() === 1) {
+          playwright = `${prefix}.getByLabel(${JSON.stringify(label)}, { exact: true })`;
+        }
+      } catch {}
+    }
+    if (!playwright && scope && dom.testId) {
+      try {
+        if (await scope.getByTestId(dom.testId).count() === 1) {
+          playwright = `${prefix}.getByTestId(${JSON.stringify(dom.testId)})`;
+        }
+      } catch {}
+    }
+
+    return {
+      target,
+      locator: { playwright, css: dom.css, frameUrl: dom.frameUrl },
+    };
+  } catch {
+    const target = semantic?.name
+      ? `${semantic.role} ${JSON.stringify(semantic.name)}`
+      : semantic?.role || 'element';
+    return { target, locator: { playwright: null, css: null, frameUrl: null } };
+  }
+}
+
+function semanticTarget(snapshot, ref) {
+  const line = snapshot?.split('\n').find(candidate => candidate.includes(`[ref=${ref}]`));
+  if (!line) return null;
+  const match = line.match(/^\s*-\s*([\w-]+)(?:\s+"((?:\\.|[^"])*)")?/);
+  if (!match) return null;
+  let name = match[2] || null;
+  if (name) {
+    try { name = JSON.parse(`"${name}"`); } catch {}
+  }
+  return { role: match[1], name };
+}
+
+function inferRole(tag, type) {
+  if (tag === 'a') return 'link';
+  if (tag === 'button' || ['button', 'submit', 'reset'].includes(type)) return 'button';
+  if (tag === 'select') return 'combobox';
+  if (tag === 'textarea') return 'textbox';
+  if (tag === 'input') {
+    if (type === 'checkbox' || type === 'radio') return type;
+    return 'textbox';
+  }
+  return tag;
+}
+
 // Diagnose why a click failed. Returns one of:
 //   { kind: 'hidden', detail: '0×0' | 'offscreen' }   — element exists but isn't clickable as designed
 //   { kind: 'overlay', detail: 'p.typo' }             — element is visible but obscured by something on top

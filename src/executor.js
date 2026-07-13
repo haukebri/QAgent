@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Agent } from '@earendil-works/pi-agent-core';
 import { streamWithRequestAuth } from './llm-auth.js';
-import { observe, click, fill, selectOption, pressKey, type, goBack } from './tools.js';
+import { observe, inspectTarget, click, fill, selectOption, pressKey, type, goBack } from './tools.js';
 import { verify } from './verifier.js';
 import { compressAgainstBaseline } from './snapshot-compress.js';
 import { observeWithSettle, observeForVerdict, diffSnapshots, compactObservation, formatPreviousActionResult } from './observe-settle.js';
@@ -86,6 +86,7 @@ export async function runTodo(
   evidenceRecorder = null,
 ) {
   const t0 = Date.now();
+  const emitTurn = entry => onTurn?.(toPublicStep(entry));
 
   const scrubState = { baselineTurn: 0 };
   const agent = new Agent({
@@ -212,7 +213,7 @@ export async function runTodo(
         const llmEntry = { turn: turns, atMs: Date.now() - t0, error: fatalError, url };
         if (usage) llmEntry.tokens = stepTokens(usage);
         history.push(llmEntry);
-        await onTurn?.(llmEntry);
+        await emitTurn(llmEntry);
         break;
       }
 
@@ -221,7 +222,7 @@ export async function runTodo(
         const parseEntry = { turn: turns, atMs: Date.now() - t0, error: lastError, url };
         if (usage) parseEntry.tokens = stepTokens(usage);
         history.push(parseEntry);
-        await onTurn?.(parseEntry);
+        await emitTurn(parseEntry);
         continue;
       }
 
@@ -282,7 +283,7 @@ export async function runTodo(
           }
           if (usage) rejEntry.tokens = stepTokens(usage);
           history.push(rejEntry);
-          await onTurn?.(rejEntry);
+          await emitTurn(rejEntry);
           break;
         }
 
@@ -293,7 +294,7 @@ export async function runTodo(
         }
         if (usage) doneEntry.tokens = stepTokens(usage);
         history.push(doneEntry);
-        await onTurn?.(doneEntry);
+        await emitTurn(doneEntry);
         break;
       }
 
@@ -327,18 +328,28 @@ export async function runTodo(
         }
         if (usage) verdictEntry.tokens = stepTokens(usage);
         history.push(verdictEntry);
-        await onTurn?.(verdictEntry);
+        await emitTurn(verdictEntry);
         break;
       }
 
+      let targetInfo = null;
       if (REF_ACTIONS.has(action.action) && action.ref) {
         if (!snapshot.includes(`[ref=${action.ref}]`)) {
           lastError = `ref ${action.ref} is not present in the current snapshot; pick a ref from the latest snapshot above`;
-          const refMissEntry = { turn: turns, atMs: Date.now() - t0, action, url, error: lastError };
+          const refMissEntry = {
+            turn: turns,
+            atMs: Date.now() - t0,
+            action,
+            target: 'element no longer present in the current page',
+            url,
+            error: lastError,
+          };
           history.push(refMissEntry);
-          await onTurn?.(refMissEntry);
+          await emitTurn(refMissEntry);
           continue;
         }
+
+        targetInfo = await inspectTarget(page, action.ref, snapshot);
 
         const prospectiveSig = `${action.action}|${action.ref}|${url}`;
         if (warnedSignatures.has(prospectiveSig)) {
@@ -351,22 +362,19 @@ export async function runTodo(
             turn: turns,
             atMs: Date.now() - t0,
             action,
+            ...targetInfo,
             url,
             error: `stuck termination: ${prospectiveSig}`,
           };
           if (usage) stuckEntry.tokens = stepTokens(usage);
           history.push(stuckEntry);
-          await onTurn?.(stuckEntry);
+          await emitTurn(stuckEntry);
           break;
         }
       }
 
-      const entry = { turn: turns, atMs: Date.now() - t0, action };
+      const entry = { turn: turns, atMs: Date.now() - t0, action, ...targetInfo };
       if (usage) entry.tokens = stepTokens(usage);
-      if (REF_ACTIONS.has(action.action) && action.ref) {
-        const target = labelForRef(snapshot, action.ref);
-        if (target) entry.target = target;
-      }
       await addStepScreenshot(entry, evidenceRecorder, page);
       const tAction = Date.now();
       try {
@@ -383,7 +391,7 @@ export async function runTodo(
         entry.url = page.url();
         if (recoveredVia) entry.recoveredVia = recoveredVia;
         history.push(entry);
-        await onTurn?.(entry);
+        await emitTurn(entry);
         lastError = null;
       } catch (err) {
         const msg = err.message.split('\n')[0];
@@ -391,7 +399,7 @@ export async function runTodo(
         entry.url = page.url();
         entry.error = msg;
         history.push(entry);
-        await onTurn?.(entry);
+        await emitTurn(entry);
         lastError = msg;
       }
       if (REF_ACTIONS.has(action.action) && action.ref) {
@@ -447,12 +455,12 @@ export async function runTodo(
     return {
       outcome: 'error',
       evidence: fatalError,
-      llmVerdict: verdict,
+      llmVerdict: sanitizeAction(verdict),
       turns, elapsedMs,
       tokens, verifierTokens: null,
       finalUrl, finalSnapshot, failureScreenshot,
       ...(finalScreenshot ? { finalScreenshot } : {}),
-      history, warnings,
+      history: history.map(toPublicStep), warnings,
     };
   }
 
@@ -503,12 +511,12 @@ export async function runTodo(
     outcome,
     evidence,
     humanEvidence,
-    llmVerdict: verdict,
+    llmVerdict: sanitizeAction(verdict),
     turns, elapsedMs,
     tokens, verifierTokens,
     finalUrl, finalSnapshot, failureScreenshot,
     ...(finalScreenshot ? { finalScreenshot } : {}),
-    history, warnings, checks, verifierMode,
+    history: history.map(toPublicStep), warnings, checks, verifierMode,
   };
 }
 
@@ -605,12 +613,31 @@ async function addStepScreenshot(entry, evidence, page) {
   if (screenshot) entry.screenshot = screenshot;
 }
 
-function labelForRef(snapshot, ref) {
-  const re = new RegExp(`^\\s*-\\s*(\\w+)(?:\\s+"([^"]*)")?[^\\n]*\\[ref=${ref}\\]`, 'm');
-  const m = snapshot.match(re);
-  if (!m) return null;
-  const [, role, name] = m;
-  return name ? `${role} '${name}'` : role;
+export function toPublicStep(entry) {
+  if (!entry) return entry;
+  const out = { ...entry, action: sanitizeAction(entry.action) };
+  if (out.error) out.error = sanitizeRefs(out.error);
+  if (out.observation) out.observation = publicObservation(out.observation);
+  return out;
+}
+
+function publicObservation(observation) {
+  const { addedRefs = [], removedRefs = [], ...out } = observation;
+  if (addedRefs.length) out.addedElementsCount = addedRefs.length;
+  if (removedRefs.length) out.removedElementsCount = removedRefs.length;
+  return out;
+}
+
+function sanitizeAction(action) {
+  if (!action) return action;
+  const { ref, ...out } = action;
+  if (out.reason) out.reason = sanitizeRefs(out.reason);
+  if (out.summary) out.summary = sanitizeRefs(out.summary);
+  return out;
+}
+
+function sanitizeRefs(value) {
+  return String(value).replace(/\b(?:ref\s+)?(?:f\d+)?e\d+\b/giu, 'selected element');
 }
 
 function oneLine(value) {

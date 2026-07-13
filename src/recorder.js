@@ -12,7 +12,9 @@ function transformTokens(t) {
 
 function transformObservation(o) {
   if (!o) return o;
-  const out = { ...o };
+  const { addedRefs = [], removedRefs = [], ...out } = o;
+  if (addedRefs.length) out.addedElementsCount = addedRefs.length;
+  if (removedRefs.length) out.removedElementsCount = removedRefs.length;
   if ('settleMs' in out) {
     out.settleSec = toSec(out.settleMs);
     delete out.settleMs;
@@ -22,6 +24,10 @@ function transformObservation(o) {
 
 function transformStep(s) {
   const out = { ...s };
+  if (out.action?.ref) {
+    const { ref, ...action } = out.action;
+    out.action = action;
+  }
   if ('atMs' in out) {
     out.atSec = toSec(out.atMs);
     delete out.atMs;

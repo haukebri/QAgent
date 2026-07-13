@@ -14,7 +14,14 @@ test('records locale in trace payloads', () => {
     tokens: null,
     verifierTokens: null,
     verifierMode: 'checks',
-    history: [{ turn: 1, action: { action: 'click', ref: 'e1' }, recoveredVia: 'overlay' }],
+    history: [{
+      turn: 1,
+      action: { action: 'click', ref: 'e1' },
+      target: 'button "Submit"',
+      locator: { playwright: 'page.getByRole("button", { name: "Submit", exact: true })', css: '#submit', frameUrl: null },
+      observation: { addedRefs: ['e2'], removedRefs: ['f1e3'] },
+      recoveredVia: 'overlay',
+    }],
     warnings: [],
     checks: [
       { claim: 'claim one', verdict: 'yes', evidence: 'seen' },
@@ -29,4 +36,10 @@ test('records locale in trace payloads', () => {
     { claim: 'claim one', verdict: 'yes', evidence: 'seen' },
   ]);
   assert.equal(payload.steps[0].recoveredVia, 'overlay');
+  assert.equal(payload.steps[0].action.ref, undefined);
+  assert.equal(payload.steps[0].target, 'button "Submit"');
+  assert.equal(payload.steps[0].locator.css, '#submit');
+  assert.equal(payload.steps[0].observation.addedElementsCount, 1);
+  assert.equal(payload.steps[0].observation.removedElementsCount, 1);
+  assert.equal(payload.steps[0].observation.addedRefs, undefined);
 });

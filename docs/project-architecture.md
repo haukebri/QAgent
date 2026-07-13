@@ -36,9 +36,11 @@ ladder below.
 
 Browser surface. `observe(page)` returns Playwright's ai-mode ariaSnapshot YAML
 with refs baked in as `[ref=eN]`. `click`, `fill`, `selectOption`, `pressKey`,
-and `type` resolve refs via `aria-ref=${ref}` and mutate the page. `navigate` is
-used by `runner.js` for setup/pre-navigation; it is not exposed as a driver
-action.
+and `type` resolve refs via `aria-ref=${ref}` and mutate the page. Before each
+referenced action, the executor records a semantic target plus unique
+Playwright/CSS locator candidates. Refs remain internal and are stripped from
+public events and results. `navigate` is used by `runner.js` for
+setup/pre-navigation; it is not exposed as a driver action.
 
 ### executor.js
 

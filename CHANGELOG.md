@@ -1,7 +1,7 @@
 # QAgent consumer changelog
 
 This document covers consumer-facing changes released from **2026-07-06 through
-2026-07-13** in `v0.7.0` and `v0.8.0`.
+2026-07-13** in `v0.7.0` and `v0.8.0`, plus the upcoming `v0.8.1` patch.
 It is written for services that invoke the `qagent` CLI, consume its JSON or
 NDJSON output, or call `runQAgent()` directly.
 
@@ -11,6 +11,7 @@ NDJSON output, or call `runQAgent()` directly.
 |---|---|
 | Screenshot evidence | Released in `v0.7.0` |
 | Claim verification, locale, recovery, and human verdicts | Released in `v0.8.0` |
+| Semantic action targets | Planned for `v0.8.1` |
 
 `v0.7.0` points to commit `faf1d35`. `v0.8.0` points to commit `b9a73d7` and
 contains the 15 commits made after `v0.7.0`.
@@ -37,6 +38,21 @@ contains the 15 commits made after `v0.7.0`.
 - Write goals as stable, visibly checkable claims. Prefer named UI text, items,
   URLs, and dialog contents over vague states, volatile counts, or mandatory
   retry wording.
+
+## v0.8.1 — 2026-07-13
+
+### Semantic action targets
+
+Consumer-facing steps no longer expose Playwright accessibility refs such as
+`e23`. Referenced actions now include a human-readable `target` and optional
+`locator` metadata with a semantic Playwright locator, a unique stable CSS
+selector, and child-frame URL when applicable. Observation ref arrays are
+replaced with added/removed element counts.
+
+**Consumer action:** Stop reading `action.ref`. Use `target` for display and
+`locator.playwright` or `locator.css` when generating Playwright code. CSS is
+null when QAgent cannot produce a unique selector without structural or class
+heuristics.
 
 ## Usage changes
 

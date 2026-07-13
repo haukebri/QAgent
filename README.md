@@ -306,18 +306,22 @@ One CLI call. The verdict comes back as a short structured envelope the next age
   "atMs": 1594,                    // number, ms since run start (cumulative)
   "action": {                      // object, the action emitted by the driver LLM
     "action": "click",             // string, one of: click | fill | selectOption | pressKey | type | goBack | wait | done | fail
-    "ref": "e6",                   // string (click | fill | selectOption | type | pressKey — snapshot ref)
     "value": "...",                // string | string[] (fill | selectOption | type)
     "key": "Enter",                // string (pressKey)
     "ms": 1500,                    // number (wait — requested duration)
     "summary": "...",              // string (done — driver's natural-language verdict)
     "reason": "..."                // string (fail — driver's natural-language reason)
   },
-  "target": "Sign in",             // string, optional — human label resolved from ref (click | fill)
+  "target": "button \"Sign in\" in form \"Login\"", // string, semantic human description
+  "locator": {                     // object, optional — reusable locator metadata
+    "playwright": "page.getByRole(\"button\", { name: \"Sign in\", exact: true })",
+    "css": "#sign-in",             // string | null — only when a stable candidate is unique
+    "frameUrl": null               // string | null — set when the locator is frame-relative
+  },
   "url": "https://.../page",       // string, page URL after the action
   "ms": 180,                       // number, browser-action duration; absent for ref-miss errors
   "screenshot": "step-01.jpg",     // string, optional — relative to --evidence-dir
-  "error": "ref e87 not in snapshot"  // string, present only when the action errored
+  "error": "selected element is no longer present" // string, present only when the action errored
 }
 
 // done event — always the last line on stdout, regardless of outcome:
@@ -346,6 +350,11 @@ One CLI call. The verdict comes back as a short structured envelope the next age
 ```
 
 A `done` event is emitted even on `outcome: fail` and `outcome: error` — the envelope shape is stable; only verdict fields differ. Humans should read `humanEvidence`; automation and debugging should use `outcome`, `checks`, and `evidence`.
+
+Accessibility refs are an internal driver protocol and are not exposed in turn
+events, returned history, JSON, or trace steps. Use `target` for reports and
+`locator.playwright` or `locator.css` when converting a run into a maintained
+Playwright test.
 
 Pipe-friendly recipes:
 

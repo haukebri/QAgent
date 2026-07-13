@@ -51,14 +51,24 @@ test('falls back to single-call verification with mode and warning when decompos
 
 test('records checks mode when claim-based verification completes', async () => {
   const faux = registerFauxProvider();
+  let checkContext = '';
   faux.setResponses([
     fauxAssistantMessage('{"claims":["the final snapshot shows Done"]}'),
-    fauxAssistantMessage('{"verdict":"yes","evidence":"The final snapshot contains Done."}'),
+    context => {
+      checkContext = JSON.stringify(context);
+      return fauxAssistantMessage('{"verdict":"yes","evidence":"The final snapshot contains Done."}');
+    },
     fauxAssistantMessage('{"humanEvidence":"The run passed because the final page shows Done."}'),
   ]);
 
   try {
-    const result = await verify('confirm done', { action: 'done' }, [], 'https://example.test', 'Done', faux.getModel(), async () => ({}));
+    const history = [{
+      action: { action: 'click', ref: 'e23', reason: 'Click ref e23' },
+      target: 'button "Done"',
+      locator: { playwright: 'page.getByRole("button", { name: "Done", exact: true })', css: '#done', frameUrl: null },
+      error: 'ref e23 was briefly covered',
+    }];
+    const result = await verify('confirm done', { action: 'done' }, history, 'https://example.test', 'Done', faux.getModel(), async () => ({}));
 
     assert.equal(result.outcome, 'pass');
     assert.equal(result.verifierMode, 'checks');
@@ -67,6 +77,9 @@ test('records checks mode when claim-based verification completes', async () => 
     assert.deepEqual(result.checks, [
       { claim: 'the final snapshot shows Done', verdict: 'yes', evidence: 'The final snapshot contains Done.' },
     ]);
+    assert.match(checkContext, /button \\"Done\\"/);
+    assert.match(checkContext, /getByRole/);
+    assert.doesNotMatch(checkContext, /\be23\b/);
   } finally {
     faux.unregister();
   }

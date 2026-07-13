@@ -157,12 +157,13 @@ export function aggregateChecks(checks) {
 function buildActionsBlock(history, { includeDriverText = true } = {}) {
   const actionsBlock = history.length
     ? history.map((h, i) => {
-        const actionStr = JSON.stringify(includeDriverText ? h.action : stripDriverText(h.action));
+        const actionStr = JSON.stringify(includeDriverText ? stripRef(h.action) : stripDriverText(h.action));
         const lines = [`  ${i + 1}. action: ${actionStr}`];
         if (h.target) lines.push(`     target: ${h.target}`);
+        if (h.locator) lines.push(`     locator: ${JSON.stringify(h.locator)}`);
         if (h.url) lines.push(`     resultUrl: ${h.url}`);
-        if (h.error) lines.push(`     error: ${h.error}`);
-        if (h.observation) lines.push(`     resultObservation: ${JSON.stringify(h.observation)}`);
+        if (h.error) lines.push(`     error: ${sanitizeRefs(h.error)}`);
+        if (h.observation) lines.push(`     resultObservation: ${JSON.stringify(stripObservationRefs(h.observation))}`);
         return lines.join('\n');
       }).join('\n')
     : '  (none)';
@@ -171,8 +172,25 @@ function buildActionsBlock(history, { includeDriverText = true } = {}) {
 
 function stripDriverText(action) {
   if (!action || typeof action !== 'object' || Array.isArray(action)) return action;
-  const { reason, summary, ...rest } = action;
+  const { reason, summary, ref, ...rest } = action;
   return rest;
+}
+
+function stripRef(action) {
+  if (!action || typeof action !== 'object' || Array.isArray(action)) return action;
+  const { ref, ...rest } = action;
+  if (rest.reason) rest.reason = sanitizeRefs(rest.reason);
+  if (rest.summary) rest.summary = sanitizeRefs(rest.summary);
+  return rest;
+}
+
+function stripObservationRefs(observation) {
+  const { addedRefs, removedRefs, ...rest } = observation;
+  return rest;
+}
+
+function sanitizeRefs(value) {
+  return String(value).replace(/\b(?:ref\s+)?(?:f\d+)?e\d+\b/giu, 'selected element');
 }
 
 function buildTranscript({ history, finalUrl, finalSnapshot }) {

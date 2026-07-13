@@ -1,7 +1,59 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium } from 'playwright';
-import { click, goBack } from '../src/tools.js';
+import { click, goBack, inspectTarget } from '../src/tools.js';
+
+test('describes targets with semantic and stable locators', async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <form aria-label="Checkout">
+        <button id="submit" data-testid="submit-order">Submit order</button>
+        <button>Continue</button><button>Continue</button>
+        <label>Email <input name="email"></label>
+      </form>
+    `);
+    const snapshot = await page.locator('body').ariaSnapshot({ mode: 'ai' });
+    const refFor = name => snapshot.match(new RegExp(`(?:button|textbox) "${name}" \\[ref=(e\\d+)\\]`))?.[1];
+
+    assert.deepEqual(await inspectTarget(page, refFor('Submit order'), snapshot), {
+      target: 'button "Submit order" in form "Checkout"',
+      locator: {
+        playwright: 'page.getByRole("button", { name: "Submit order", exact: true })',
+        css: '[data-testid="submit-order"]',
+        frameUrl: null,
+      },
+    });
+    assert.deepEqual(await inspectTarget(page, refFor('Email'), snapshot), {
+      target: 'textbox "Email" in form "Checkout"',
+      locator: {
+        playwright: 'page.getByRole("textbox", { name: "Email", exact: true })',
+        css: 'input[name="email"]',
+        frameUrl: null,
+      },
+    });
+    const continueRef = refFor('Continue');
+    assert.deepEqual(await inspectTarget(page, continueRef, snapshot), {
+      target: 'button "Continue" in form "Checkout"',
+      locator: { playwright: null, css: null, frameUrl: null },
+    });
+    await page.setContent('<iframe></iframe>');
+    await page.frames()[1].setContent('<button id="pay">Pay now</button>');
+    const frameSnapshot = await page.locator('body').ariaSnapshot({ mode: 'ai' });
+    const frameRef = frameSnapshot.match(/button "Pay now" \[ref=((?:f\d+)?e\d+)\]/)?.[1];
+    assert.deepEqual(await inspectTarget(page, frameRef, frameSnapshot), {
+      target: 'button "Pay now"',
+      locator: {
+        playwright: 'frame.getByRole("button", { name: "Pay now", exact: true })',
+        css: '#pay',
+        frameUrl: 'about:blank',
+      },
+    });
+  } finally {
+    await browser.close();
+  }
+});
 
 test('goBack waits for page load', async () => {
   const calls = [];

@@ -474,6 +474,7 @@ export async function runTodo(
 
   let outcome;
   let evidence;
+  let humanEvidence;
   let checks = [];
   let verifierMode = null;
   let verifierTokens = null;
@@ -481,6 +482,7 @@ export async function runTodo(
     const result = await verify(goal, verifierVerdict, history, finalUrl, finalSnapshot, judgeModel, resolveRequestAuth);
     outcome = result.outcome;
     evidence = result.evidence;
+    humanEvidence = result.humanEvidence;
     checks = result.checks ?? [];
     verifierMode = result.verifierMode ?? null;
     warnings.push(...(result.warnings ?? []));
@@ -492,6 +494,7 @@ export async function runTodo(
     warnings.push(`verifier unavailable: ${message}`);
     outcome = 'error';
     evidence = `verifier unavailable: ${message}`;
+    humanEvidence = evidence;
   }
 
   const failureScreenshot = outcome !== 'pass' ? await captureScreenshot(page) : null;
@@ -499,6 +502,7 @@ export async function runTodo(
   return {
     outcome,
     evidence,
+    humanEvidence,
     llmVerdict: verdict,
     turns, elapsedMs,
     tokens, verifierTokens,

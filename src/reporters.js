@@ -87,7 +87,7 @@ function listReporter() {
           : result.outcome === 'fail'
             ? `${c.red}✗ FAIL${c.reset}`
             : `${c.red}✗ ERROR${c.reset}`;
-      process.stdout.write(`\n${tag} — ${result.evidence}\n`);
+      process.stdout.write(`\n${tag} — ${result.humanEvidence ?? result.evidence}\n`);
       process.stdout.write(`${c.dim}${result.turns} turns · ${elapsedS}s · $${totalCost.toFixed(4)}${c.reset}\n`);
     },
   };
@@ -117,6 +117,7 @@ function ndjsonReporter() {
         goal: ctx.goal,
         outcome: result.outcome,
         evidence: result.evidence,
+        humanEvidence: result.humanEvidence ?? null,
         turns: result.turns,
         elapsedMs: result.elapsedMs,
         driverCost,

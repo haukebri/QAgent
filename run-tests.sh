@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Run the three benchmark tests N times each (default 5).
+# Run the three benchmark tests N times each (default 5), one of each in parallel.
 # Usage: ./run-tests.sh [runs]
 set -u
 
 RUNS="${1:-5}"
-QAGENT="node $(dirname "$0")/src/cli.js"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 VORWERK_URL='https://www.vorwerk.com/de/de/c/home/angebote/summer-week'
 VORWERK_GOAL='Goal: I can explore the summer-week offer and add a discounted product to the cart.
 Steps:
 - On the summer-week page I can see and click a "Kobold Angebote entdecken!" button which redirects to the summer-week/kobold url
-- On this page the "Deine Akku-Alltagshelfer" teaser section shows two product offers: "Kobold VM7 Akku-Handstaubsauger" and "Kobold VG100+ Flächenreiniger"
-- I can click "Zu allen Angeboten" in the "Deine Akku-Alltagshelfer" section which redirects to summer-week/summer-week-kobold
-- On the summer-week-kobold page I can click "Weitere 6 Produkte anzeigen" and additional products appear in the list, including the Kobold PB440 Elektro-Polsterbürste
+- On this page the "Deine Akku-Alltagshelfer" teaser section shows at least two product offers, including "Kobold VM7 Akku-Handstaubsauger" and "Kobold VG100+ Flächenreiniger"
+- I can click "Zu allen Angeboten" (the one in the "Deine Akku-Alltagshelfer" section) and it redirects to summer-week/summer-week-kobold
+- On the summer-week-kobold page I can click the "Weitere ... Produkte anzeigen" button (the number in the label varies) and additional products appear in the list, including the Kobold PB440 Elektro-Polsterbürste
 - I can click the teaser for "Kobold PB440 Elektro-Polsterbürste" which redirects to https://www.vorwerk.com/de/de/s/shop/kobold-pb440-elektro-polsterbuerste-de
 - I can click "In den Warenkorb", after which a dialog appears offering "Weiter einkaufen" and "Zur Kasse"
 - In that dialog I can click "Zur Kasse" which shows the cart page (url ends with /shop/cart) containing the Kobold PB440'
@@ -36,23 +36,22 @@ Steps:
 - Continue to the next step. If a panel or overlay blocks a click, close or complete it first instead of retrying the same click
 - Continue until the insurance step is shown, where insurance options and their prices are visible'
 
-run_batch() {
-  local name="$1" url="$2" goal="$3" locale="$4"
-  local pass=0 fail=0 other=0
-  echo "=== $name ($RUNS runs) ==="
-  for i in $(seq 1 "$RUNS"); do
-    echo "--- $name run $i/$RUNS ---"
-    $QAGENT --url "$url" --locale "$locale" --reporter list,json "$goal"
-    case $? in
-      0) pass=$((pass+1)) ;;
-      1) fail=$((fail+1)) ;;
-      *) other=$((other+1)) ;;
-    esac
-  done
-  echo "=== $name summary: $pass pass, $fail fail, $other error ==="
-  echo
+run_one() {
+  local name="$1" i="$2" url goal locale
+  case "$name" in
+    vorwerk-summer-week) url="$VORWERK_URL"; goal="$VORWERK_GOAL"; locale="de-DE" ;;
+    gravityforms-inquiry) url="$FORM_URL"; goal="$FORM_GOAL"; locale="en-US" ;;
+    aida-booking) url="$AIDA_URL"; goal="$AIDA_GOAL"; locale="de-DE" ;;
+  esac
+
+  echo "--- $name run $i/$RUNS ---"
+  node "$SCRIPT_DIR/src/cli.js" --url "$url" --locale "$locale" \
+    --reporter list,trace --output-dir "$SCRIPT_DIR/results" "$goal" || true
 }
 
-run_batch "vorwerk-summer-week" "$VORWERK_URL" "$VORWERK_GOAL" "de-DE"
-run_batch "gravityforms-inquiry" "$FORM_URL" "$FORM_GOAL" "en-US"
-run_batch "aida-booking" "$AIDA_URL" "$AIDA_GOAL" "de-DE"
+for i in $(seq 1 "$RUNS"); do
+  run_one vorwerk-summer-week "$i" &
+  run_one gravityforms-inquiry "$i" &
+  run_one aida-booking "$i" &
+  wait
+done

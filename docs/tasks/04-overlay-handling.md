@@ -2,7 +2,7 @@
 
 ## Status
 
-Detection is in place: `diagnoseClickFailure` in `src/tools.js` already classifies blocked clicks as `kind: 'overlay'` and tells the model. What's missing is automatic dismissal of common consent/cookie/modal overlays so the LLM doesn't have to discover and click through them on every run.
+Implemented: blocked clicks now attempt one automatic consent/modal dismissal and retry before returning the overlay diagnostic to the model.
 
 Re-confirmed 2026-05-04: a qwen3.5-flash run against the Gravity Forms test page failed because a Privacy Settings dialog overlay (`ref=e607`) blocked the form. The other 4/5 runs passed — overlays are the dominant remaining flake source.
 

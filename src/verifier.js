@@ -61,6 +61,17 @@ const CHECK_PROMPT =
   '- If in doubt, answer "unknown".\n' +
   "- The driver's action reasons, done summary, or self-reported success are not proof unless action targets, URLs, observations, or final snapshot corroborate them.";
 
+const SUMMARY_PROMPT =
+  'You are a QA verifier writing the final human-facing verdict for a browser test run.\n\n' +
+  'Respond with a single JSON object and nothing else (no markdown fences, no commentary):\n' +
+  '  { "humanEvidence": "<clear, concise verdict text for a human reader>" }\n\n' +
+  'Rules:\n' +
+  '- Do not change or second-guess the supplied outcome.\n' +
+  '- Summarize what passed or failed from the supplied claim checks.\n' +
+  '- Mention the decisive concrete evidence, URL, action, or missing/unknown check.\n' +
+  '- Keep it to one short paragraph. No bullets.\n' +
+  '- Avoid JSON-ish wording like "verified 3 of 4 claims" unless that is the clearest useful summary.';
+
 export async function verify(goal, verdict, history, finalUrl, finalSnapshot, model, resolveRequestAuth) {
   const args = { goal, verdict, history, finalUrl, finalSnapshot, model, resolveRequestAuth };
   const tokens = emptyTokens();
@@ -77,7 +88,28 @@ export async function verify(goal, verdict, history, finalUrl, finalSnapshot, mo
       checks.push({ claim, verdict: checked.verdict, evidence: checked.evidence });
     }
 
-    return { ...aggregateChecks(checks), checks, verifierMode: 'checks', tokens };
+    const aggregate = aggregateChecks(checks);
+    let humanEvidence = aggregate.evidence;
+    const warnings = [...(aggregate.warnings ?? [])];
+
+    try {
+      const summary = await callWithRetry(() => callSummary({
+        goal,
+        outcome: aggregate.outcome,
+        finalUrl,
+        checks,
+        warnings,
+        model,
+        resolveRequestAuth,
+      }));
+      addTokens(tokens, summary.tokens);
+      humanEvidence = summary.humanEvidence;
+    } catch (summaryErr) {
+      addTokens(tokens, summaryErr.tokens);
+      warnings.push(`verifier human summary unavailable: ${summaryErr.message.split('\n')[0]}`);
+    }
+
+    return { ...aggregate, warnings, humanEvidence, checks, verifierMode: 'checks', tokens };
   } catch (err) {
     addTokens(tokens, err.tokens);
     const warning = 'verifier: claim decomposition failed, fell back to single-call verification' +
@@ -87,6 +119,7 @@ export async function verify(goal, verdict, history, finalUrl, finalSnapshot, mo
       addTokens(tokens, fallback.tokens);
       return {
         ...fallback,
+        humanEvidence: fallback.evidence,
         checks: [],
         verifierMode: 'single',
         warnings: [...(fallback.warnings ?? []), warning],
@@ -188,6 +221,27 @@ async function callCheck({ claim, transcript, model, resolveRequestAuth }) {
     throw errorWithTokens('missing claim evidence', tokens);
   }
   return { verdict: parsed.verdict, evidence: parsed.evidence.trim(), tokens };
+}
+
+async function callSummary({ goal, outcome, finalUrl, checks, warnings, model, resolveRequestAuth }) {
+  const { parsed, tokens } = await callJson({
+    systemPrompt: SUMMARY_PROMPT,
+    prompt:
+      `Goal: ${goal}\n\n` +
+      `Outcome: ${outcome}\n\n` +
+      `Final URL: ${finalUrl}\n\n` +
+      `Claim checks:\n${JSON.stringify(checks, null, 2)}\n\n` +
+      `Warnings:\n${JSON.stringify(warnings ?? [], null, 2)}\n\n` +
+      `Your JSON:`,
+    model,
+    resolveRequestAuth,
+    label: 'verifier human summary',
+  });
+
+  if (typeof parsed.humanEvidence !== 'string' || !parsed.humanEvidence.trim()) {
+    throw errorWithTokens('missing humanEvidence', tokens);
+  }
+  return { humanEvidence: parsed.humanEvidence.trim(), tokens };
 }
 
 async function callSingleJudgeWithRetry(args) {

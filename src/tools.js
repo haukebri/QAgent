@@ -111,6 +111,43 @@ function overlayErrorMessage(diag) {
   return `click blocked by overlay${text}${buttons} [${diag.detail}]. Interact with the overlay first — click one of its buttons or a close control — or pick a different target.`;
 }
 
+const OVERLAY_BUTTON_NAMES = [
+  /^(?:accept all(?: cookies)?|allow all(?: cookies)?|i agree|agree|alle cookies akzeptieren|alle akzeptieren|aceptar todas las cookies)$/iu,
+  /^(?:reject all(?: cookies)?|decline all(?: cookies)?|necessary cookies only|use necessary cookies only|alle ablehnen|nur notwendige cookies|optionale cookies deaktivieren|rechazarlas todas)$/iu,
+  /^(?:no,? thanks|not now|close|dismiss|nein danke|schließen|schliessen|cerrar)$/iu,
+];
+
+async function tryDismissOverlay(page, actionTimeoutMs) {
+  const scopes = [page, ...page.frames().filter(frame => frame !== page.mainFrame())];
+  for (const name of OVERLAY_BUTTON_NAMES) {
+    for (const scope of scopes) {
+      try {
+        const buttons = scope.getByRole('button', { name });
+        const count = await buttons.count();
+        for (let i = 0; i < count; i++) {
+          const button = buttons.nth(i);
+          if (!await button.isVisible()) continue;
+          try {
+            await button.click({ timeout: actionTimeoutMs });
+            return true;
+          } catch {
+            // Try another matching control or Escape.
+          }
+        }
+      } catch {
+        // Frames can detach while an overlay closes.
+      }
+    }
+  }
+
+  try {
+    await page.keyboard.press('Escape');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Styled-radio / styled-checkbox pattern: native input is hidden (0×0 or
 // pointer-events:none), the visible thing is a wrapper card. When click on
 // the input fails, walk up the DOM to the first clickable ancestor and click
@@ -163,14 +200,14 @@ async function tryClickClickableAncestor(locator, actionTimeoutMs) {
   }
 }
 
-async function actOrDescribe(locator, verb, action, actionTimeoutMs) {
+async function actOrDescribe(locator, verb, action, actionTimeoutMs, recoverOverlay = null) {
   try {
     await action();
     return null;
   } catch (err) {
     if (verb === 'click') {
       const diag = await diagnoseClickFailure(locator);
-      if (diag && (diag.kind === 'hidden' || diag.kind === 'overlay')) {
+      if (diag?.kind === 'hidden') {
         if (await tryClickClickableAncestor(locator, actionTimeoutMs)) {
           return 'ancestor';
         }
@@ -179,6 +216,14 @@ async function actOrDescribe(locator, verb, action, actionTimeoutMs) {
         throw new Error(`click target is hidden (${diag.detail}); no clickable ancestor found`);
       }
       if (diag?.kind === 'overlay') {
+        if (recoverOverlay && await recoverOverlay()) {
+          try {
+            await action();
+            return 'overlay';
+          } catch {
+            // Preserve the original, more useful overlay diagnostic below.
+          }
+        }
         throw new Error(overlayErrorMessage(diag));
       }
       throw err;
@@ -194,7 +239,13 @@ async function actOrDescribe(locator, verb, action, actionTimeoutMs) {
 
 export async function click(page, ref, actionTimeoutMs) {
   const locator = page.locator(`aria-ref=${ref}`);
-  return await actOrDescribe(locator, 'click', () => locator.click({ timeout: actionTimeoutMs }), actionTimeoutMs);
+  return await actOrDescribe(
+    locator,
+    'click',
+    () => locator.click({ timeout: actionTimeoutMs }),
+    actionTimeoutMs,
+    () => tryDismissOverlay(page, actionTimeoutMs),
+  );
 }
 
 export async function fill(page, ref, value, actionTimeoutMs) {

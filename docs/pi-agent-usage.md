@@ -80,7 +80,12 @@ The driver prompt requires a single JSON object. After `agent.prompt(...)`, read
 
 ## verifier agent shape
 
-The verifier uses a separate one-shot `Agent` with its own system prompt and the verifier model when configured. It returns `{ outcome: "pass" | "fail", evidence }` and retries once on provider or parse failure.
+The verifier uses separate `Agent` calls with the verifier model when configured:
+one call decomposes the goal into claims, one call per claim checks the frozen
+transcript, and a final prose-only call writes `humanEvidence`. The aggregated
+claim checks decide `{ outcome: "pass" | "fail", evidence }`; `humanEvidence` is
+for people and must not change the outcome. If claim decomposition fails, QAgent
+falls back to the older single-call verifier.
 
 ```js
 const agent = new Agent({

@@ -7,13 +7,14 @@ test('records locale in trace payloads', () => {
     outcome: 'pass',
     llmVerdict: null,
     evidence: 'ok',
+    humanEvidence: 'Looks good.',
     finalUrl: 'https://example.test',
     turns: 0,
     elapsedMs: 0,
     tokens: null,
     verifierTokens: null,
     verifierMode: 'checks',
-    history: [],
+    history: [{ turn: 1, action: { action: 'click', ref: 'e1' }, recoveredVia: 'overlay' }],
     warnings: [],
     checks: [
       { claim: 'claim one', verdict: 'yes', evidence: 'seen' },
@@ -22,7 +23,10 @@ test('records locale in trace payloads', () => {
 
   assert.equal(payload.locale, 'de-DE');
   assert.equal(payload.verifierMode, 'checks');
+  assert.equal(payload.evidence, 'ok');
+  assert.equal(payload.humanEvidence, 'Looks good.');
   assert.deepEqual(payload.checks, [
     { claim: 'claim one', verdict: 'yes', evidence: 'seen' },
   ]);
+  assert.equal(payload.steps[0].recoveredVia, 'overlay');
 });

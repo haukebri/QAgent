@@ -157,10 +157,10 @@ Avoid pi-mono's file-locked `auth.json` for now — overkill for a runner that f
 
 | Reporter | Output | Use case |
 |---|---|---|
-| `list` (default) | Pretty live progress to stdout: `▶ goal → ✓ pass (12 turns, 8.2s, $0.04)` | Human run |
-| `json` | Single JSON object to stdout at end (full trace) | Piping to other tools |
-| `ndjson` | Newline-delimited JSON events streamed to stdout | **AI agent / live log** |
-| `trace` | `results/{iso}.json` written to disk (today's behavior) | When the user explicitly wants a trace file |
+| `list` (default) | Pretty live progress plus the verifier's `humanEvidence` verdict text | Human run |
+| `json` | Single JSON object to stdout at end, including `humanEvidence`, compact `evidence`, and full `checks` | Piping to other tools |
+| `ndjson` | Newline-delimited JSON events streamed to stdout; final event includes `humanEvidence`, `evidence`, and `checks` | **AI agent / live log** |
+| `trace` | `results/{iso}.json` written to disk with the same detailed verdict fields | When the user explicitly wants a trace file |
 
 Compose with comma: `--reporter=list,trace`, `--reporter=ndjson`.
 
@@ -169,6 +169,7 @@ Compose with comma: `--reporter=list,trace`, `--reporter=ndjson`.
 ### 6. AI-agent / Claude Code friendliness
 
 - `--reporter=ndjson` → one JSON event per line on stdout. Each line parseable independently. Errors → stderr.
+- Humans should read `humanEvidence`; automation/debugging should use `outcome`, `checks`, and compact `evidence`.
 - **Stable exit codes:**
   - `0` — goal passed
   - `1` — goal failed (verifier said `fail`)
@@ -178,7 +179,7 @@ Compose with comma: `--reporter=list,trace`, `--reporter=ndjson`.
 - Final NDJSON event is a tiny envelope an agent can grep for:
 
   ```
-  {"event":"done","goal":"...","outcome":"pass","turns":12,"cost":0.04}
+  {"event":"done","goal":"...","outcome":"pass","humanEvidence":"...","turns":12,"cost":0.04}
   ```
 
 The most common agent integration will be Claude Code running `qagent --url <url> "<goal>" --reporter=ndjson` and reading stdout turn by turn.

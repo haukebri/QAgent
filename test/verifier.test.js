@@ -54,6 +54,7 @@ test('records checks mode when claim-based verification completes', async () => 
   faux.setResponses([
     fauxAssistantMessage('{"claims":["the final snapshot shows Done"]}'),
     fauxAssistantMessage('{"verdict":"yes","evidence":"The final snapshot contains Done."}'),
+    fauxAssistantMessage('{"humanEvidence":"The run passed because the final page shows Done."}'),
   ]);
 
   try {
@@ -61,6 +62,32 @@ test('records checks mode when claim-based verification completes', async () => 
 
     assert.equal(result.outcome, 'pass');
     assert.equal(result.verifierMode, 'checks');
+    assert.equal(result.evidence, 'verified all 1 claims');
+    assert.equal(result.humanEvidence, 'The run passed because the final page shows Done.');
+    assert.deepEqual(result.checks, [
+      { claim: 'the final snapshot shows Done', verdict: 'yes', evidence: 'The final snapshot contains Done.' },
+    ]);
+  } finally {
+    faux.unregister();
+  }
+});
+
+test('keeps aggregate evidence when human summary fails', async () => {
+  const faux = registerFauxProvider();
+  faux.setResponses([
+    fauxAssistantMessage('{"claims":["the final snapshot shows Done"]}'),
+    fauxAssistantMessage('{"verdict":"yes","evidence":"The final snapshot contains Done."}'),
+    fauxAssistantMessage('not JSON'),
+    fauxAssistantMessage('still not JSON'),
+  ]);
+
+  try {
+    const result = await verify('confirm done', { action: 'done' }, [], 'https://example.test', 'Done', faux.getModel(), async () => ({}));
+
+    assert.equal(result.outcome, 'pass');
+    assert.equal(result.evidence, 'verified all 1 claims');
+    assert.equal(result.humanEvidence, 'verified all 1 claims');
+    assert.match(result.warnings[0], /^verifier human summary unavailable: no JSON in verifier human summary:/);
     assert.deepEqual(result.checks, [
       { claim: 'the final snapshot shows Done', verdict: 'yes', evidence: 'The final snapshot contains Done.' },
     ]);

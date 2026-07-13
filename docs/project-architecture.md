@@ -52,10 +52,13 @@ decided by `verifier.js`.
 
 ### verifier.js
 
-End-state judge. Single LLM call over goal, driver verdict, action history,
-final URL, and final snapshot. Returns `{ outcome: 'pass'|'fail', evidence }`
-and retries once on provider/parse failure. Does not call Playwright; the
-executor freezes state and passes it in.
+End-state judge. It decomposes the goal into checkable claims, checks each claim
+against the frozen action history/final state, aggregates the authoritative
+`outcome` plus compact `evidence`, then makes one final prose-only LLM call for
+`humanEvidence`. Structured `checks` and `evidence` are kept for debug/automation;
+the list reporter shows `humanEvidence`. It retries provider/parse failures and
+falls back to the older single-call judge if claim decomposition fails. Does not
+call Playwright; the executor freezes state and passes it in.
 
 ### llm-auth.js
 
@@ -82,7 +85,9 @@ payloads, and snapshot compression against a baseline anchor.
 ### reporters.js / recorder.js
 
 Human list output, JSON, NDJSON, and trace-file output. `recorder.js` builds the
-trace payload and writes `results/*.json` for the `trace` reporter.
+trace payload and writes `results/*.json` for the `trace` reporter. `list` prints
+the human-facing `humanEvidence`; JSON, NDJSON, and trace payloads include both
+`humanEvidence` and the detailed `evidence`/`checks` fields.
 
 ## dependencies
 
@@ -99,7 +104,7 @@ CLI goal + URL
   -> public runner
   -> browser launch + pre-navigate
   -> executor loop: observe/settle -> LLM JSON action -> local tool
-  -> verifier judges final state
+  -> verifier checks claims + summarizes human verdict
   -> reporters emit list/json/ndjson/trace output
 ```
 

@@ -42,7 +42,80 @@ test('goBack accepts same-document history moves', async () => {
   await assert.doesNotReject(() => goBack(page));
 });
 
-test('click describes overlay content when target is blocked', async () => {
+test('click accepts cookies and retries an overlay-blocked target', async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <button id="target" style="position:absolute;left:20px;top:20px;width:120px;height:40px">Target</button>
+      <div id="overlay" class="modal" style="position:fixed;inset:0;background:white">
+        <button onclick="window.choice='reject';overlay.remove()">Reject all</button>
+        <button onclick="window.choice='accept';overlay.remove()">Accept all</button>
+      </div>
+      <script>target.onclick = () => window.clicked = true</script>
+    `);
+    const snapshot = await page.locator('body').ariaSnapshot({ mode: 'ai' });
+    const ref = snapshot.match(/button "Target" \[ref=(e\d+)\]/)?.[1];
+    assert.ok(ref);
+
+    assert.equal(await click(page, ref, 100), 'overlay');
+    assert.equal(await page.evaluate(() => window.choice), 'accept');
+    assert.equal(await page.evaluate(() => window.clicked), true);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('click dismisses an overlay button inside an iframe', async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <button id="target" style="position:absolute;left:20px;top:20px;width:120px;height:40px">Target</button>
+      <iframe style="position:fixed;inset:0;width:100%;height:100%;border:0"></iframe>
+      <script>target.onclick = () => window.clicked = true</script>
+    `);
+    await page.frames()[1].setContent(`
+      <button onclick="parent.choice='accept';parent.document.querySelector('iframe').remove()">Accept all</button>
+    `);
+    const snapshot = await page.locator('body').ariaSnapshot({ mode: 'ai' });
+    const ref = snapshot.match(/button "Target" \[ref=(e\d+)\]/)?.[1];
+    assert.ok(ref);
+
+    assert.equal(await click(page, ref, 100), 'overlay');
+    assert.equal(await page.evaluate(() => window.choice), 'accept');
+    assert.equal(await page.evaluate(() => window.clicked), true);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('click uses Escape when an overlay has no known dismissal button', async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <button id="target" style="position:absolute;left:20px;top:20px;width:120px;height:40px">Target</button>
+      <div id="overlay" style="position:fixed;inset:0;background:white">Modal</div>
+      <script>
+        target.onclick = () => window.clicked = true;
+        document.addEventListener('keydown', event => {
+          if (event.key === 'Escape') overlay.remove();
+        });
+      </script>
+    `);
+    const snapshot = await page.locator('body').ariaSnapshot({ mode: 'ai' });
+    const ref = snapshot.match(/button "Target" \[ref=(e\d+)\]/)?.[1];
+    assert.ok(ref);
+
+    assert.equal(await click(page, ref, 100), 'overlay');
+    assert.equal(await page.evaluate(() => window.clicked), true);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('click preserves the overlay diagnostic when cleanup fails', async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   try {
@@ -50,8 +123,7 @@ test('click describes overlay content when target is blocked', async () => {
       <button style="position:absolute;left:20px;top:20px;width:120px;height:40px">Target</button>
       <div id="overlay" class="modal" style="position:fixed;inset:0;background:white">
         <h2>Kabinen</h2>
-        <button aria-label="Schliessen">x</button>
-        <a href="#">Details</a>
+        <button>Details</button>
       </div>
     `);
     const snapshot = await page.locator('body').ariaSnapshot({ mode: 'ai' });
@@ -60,7 +132,7 @@ test('click describes overlay content when target is blocked', async () => {
 
     await assert.rejects(
       () => click(page, ref, 100),
-      /click blocked by overlay "Kabinen x Details" \(buttons: "Schliessen", "Details"\) \[div#overlay\.modal\]\. Interact with the overlay first/,
+      /click blocked by overlay "Kabinen Details" \(buttons: "Details"\) \[div#overlay\.modal\]\. Interact with the overlay first/,
     );
   } finally {
     await browser.close();

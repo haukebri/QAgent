@@ -7,7 +7,7 @@ QAgent is a verification layer for Claude Code, Codex, and other agentic dev loo
 [![npm version](https://img.shields.io/npm/v/@qagent/cli.svg)](https://www.npmjs.com/package/@qagent/cli)
 [![license](https://img.shields.io/npm/l/@qagent/cli.svg)](LICENSE)
 
-![QAgent driving a real browser via Playwright while a separate verifier LLM judges the end state and returns a structured verdict to the coding agent](docs/demo/demo-gif.gif)
+![QAgent driving a real browser via Playwright while a separate verifier LLM checks each goal claim against the run and returns a structured verdict to the coding agent](docs/demo/demo-gif.gif)
 
 > **Status:** pre-1.0, experimental. One inline goal per invocation; multi-goal specs and orchestration are not yet built. `--max-turns` (default 50) is the main spending cap.
 
@@ -31,7 +31,7 @@ QAgent runs the browser turns in a separate loop. Your coding agent gets back a 
 
 ![QAgent run ending in a red FAIL verdict — saucedemo login flow, step 3 failed, 3 turns, 15.2s, $0.0003](docs/demo/product-shoot-fail.png)
 
-Every run returns a verdict your coding agent can act on: the goal it tried, the steps it took, the final URL, and the one-sentence rationale behind the call. A separate verifier LLM judges the end state — so the agent that drove the browser isn't also the one grading its own work. Easy to paste back into Claude Code or Codex so the next turn already knows what to fix. No flaky test infrastructure to maintain, no spec files to update when the UI shifts.
+Every run returns a verdict your coding agent can act on: the goal it tried, the steps it took, the final URL, and the rationale behind the call. A separate verifier LLM decomposes your goal into individual claims and checks each one against the full run — so the agent that drove the browser isn't also the one grading its own work, and a failed run names the exact claim that broke (`checks` in the JSON output). Easy to paste back into Claude Code or Codex so the next turn already knows what to fix. No flaky test infrastructure to maintain, no spec files to update when the UI shifts.
 
 ---
 
@@ -165,7 +165,7 @@ These are observed minimums on real-world targets — pages with grouped fields,
 
 Cost notes:
 - Costs above are observed on a Gravity Forms multi-required-field test page; expect variation by snapshot size and turn count. Each turn re-sends a compressed accessibility snapshot to the driver, so denser pages cost more per turn.
-- The verifier runs once at the end (or on `done`/`fail`) and is roughly fixed per run.
+- The verifier runs at the end (or on `done`/`fail`): one call to decompose the goal into claims, then one check per claim. The calls share the run transcript as a common prefix, so provider prompt caching keeps the added cost small; goals with more steps mean more (cheap) check calls.
 - `--max-turns` (default 50) is the hard cap on driver spend; reduce it to bound worst-case cost on flaky models or pages.
 
 Rule of thumb: if the page has more than ~3 required fields, more than one input type, or any group/checkbox-array pattern, do not use a `nano`-class model for the driver.
@@ -174,15 +174,25 @@ Rule of thumb: if the page has more than ~3 required fields, more than one input
 
 ## Writing Good Goals
 
-Whether you or your coding agent writes the goal, the rules are the same. A good goal tells the driver **what to do** and tells the verifier **how to know it worked**. The verifier sees only the final page state — if the success signal you describe doesn't actually appear there, the run will be marked FAIL even when the action succeeded.
+Whether you or your coding agent writes the goal, the rules are the same. A good goal tells the driver **what to do** and tells the verifier **how to know it worked**.
+
+The verifier breaks your goal into individual claims and checks each against the whole run — the actions taken, how the page changed after each one, and the final state. Each claim comes back `yes`, `no`, or `unknown`: a `no` fails the run, an `unknown` (nothing in the run confirms or contradicts it) passes with a warning. So the craft is: **write every step as something the browser can visibly confirm.**
 
 ### The most important hint: a literal success signal
 
-Replace vague end-states ("I will see the result page") with the literal text or visible element that actually appears on success. Many forms render an inline confirmation rather than navigating to a new page; if your goal says "result page" the driver will keep retrying after success and the verifier will see stale errors mixed with the confirmation.
+Replace vague end-states ("I will see the result page") with the literal text or visible element that actually appears on success. Many forms render an inline confirmation rather than navigating to a new page; if your goal says "result page" the driver will keep retrying after success and the verifier has nothing to match.
 
 > ✅ `Stop immediately when the text "Thank you for your project inquiry!" appears, even if other elements (including stale error banners) are still visible on the page.`
 >
 > ❌ `End: I will see the 'result' page which tells me that I have sent the form`
+
+### Write steps as checkable claims
+
+- **Quote exact UI text — but not volatile parts.** `click "Submit Inquiry"` beats `click the submit button` — the verifier matches the run against your words. Leave dynamic values out of the quote, though: a goal that says `"Weitere 6 Produkte anzeigen"` fails the day the site has 7 products; write `the "Weitere ... Produkte anzeigen" button (the number varies)` instead.
+- **Name expected items instead of counting them.** `the section shows "Kobold VM7" and "Kobold VG100+"` is reliably checkable; `exactly two offers` makes a small verifier model count — and miscount.
+- **Describe transient UI by its visible content.** A popup is gone from the final page; `a dialog appears offering "Weiter einkaufen" and "Zur Kasse"` gives the verifier the exact text that shows up when the dialog opens.
+- **Phrase retries and error handling conditionally.** `If the page shows "There was a problem", fix the named fields and submit again` is satisfied by a first-try success; `submit repeatedly until errors are gone` fails a run that never needed a retry.
+- **Assert URLs where they matter.** `which redirects to /shop/cart` is the cheapest, most reliable claim there is.
 
 ### Other patterns that help
 
@@ -190,6 +200,7 @@ Replace vague end-states ("I will see the result page") with the literal text or
 - **Disambiguate input types when the labels are ambiguous.** "Services Needed" reads like a dropdown but is actually a checkbox group — call that out: `(CHECKBOXES, not dropdown)`.
 - **Name the parts of grouped fields.** Forms with a `Name` group often expose two textboxes labelled `First` and `Last`; small models otherwise dump the full name into the first textbox they see.
 - **Spell out paired-field constraints.** `Enter Email and Confirm Email must contain the same value` prevents the "Your emails do not match" failure mode.
+- **Match the browser locale to the site.** `--locale de-DE` makes consent banners and validation messages render in the language your goal quotes — without it, a German site may serve its cookie dialog in whatever language the site guesses, confusing both driver and verifier.
 
 ### Full example
 
@@ -234,6 +245,7 @@ Strategy:
 | Stream events to an AI agent | `qagent --url <url> "<goal>" --reporter=ndjson` |
 | Save a JSON trace file | `qagent --url <url> "<goal>" --reporter=trace` |
 | Save screenshot evidence | `qagent --url <url> "<goal>" --evidence-dir ./evidence` |
+| Test a localized site | `qagent --url <url> --locale de-DE "<goal>"` |
 | Watch the browser | `qagent --url <url> "<goal>" --headed` |
 
 ---
@@ -242,7 +254,7 @@ Strategy:
 
 | Name | Output |
 |---|---|
-| `list` (default) | Live human-readable progress with ✓/✗, color, per-turn timing |
+| `list` (default) | Live human-readable progress with ✓/✗, color, per-turn timing, and the verifier's `humanEvidence` summary |
 | `ndjson` | One JSON event per turn streamed to stdout, ending with a `done` envelope |
 | `json` | Single JSON object dumped at the end |
 | `trace` | Writes `results/<YYYY-MM-DDTHH-MM>H<HASH>.json` (path overridable with `--output-dir`); confirmation goes to **stderr** so machine-readable reporters keep stdout clean |
@@ -293,7 +305,7 @@ One CLI call. The verdict comes back as a short structured envelope the next age
   "turn": 1,                       // number, sequential, starts at 1
   "atMs": 1594,                    // number, ms since run start (cumulative)
   "action": {                      // object, the action emitted by the driver LLM
-    "action": "click",             // string, one of: click | fill | selectOption | pressKey | type | wait | done | fail
+    "action": "click",             // string, one of: click | fill | selectOption | pressKey | type | goBack | wait | done | fail
     "ref": "e6",                   // string (click | fill | selectOption | type | pressKey — snapshot ref)
     "value": "...",                // string | string[] (fill | selectOption | type)
     "key": "Enter",                // string (pressKey)
@@ -313,7 +325,8 @@ One CLI call. The verdict comes back as a short structured envelope the next age
   "event": "done",                 // string, always "done"
   "goal": "...",                   // string, the input goal verbatim
   "outcome": "pass",               // string, one of: pass | fail | error (matches exit code 0 | 1 | 3)
-  "evidence": "...",               // string, the verifier's one-sentence rationale (always present)
+  "evidence": "...",               // string, compact verifier/debug rationale (always present)
+  "humanEvidence": "...",          // string, nicer human verdict text shown by the list reporter
   "turns": 2,                      // number, total LLM turns executed
   "elapsedMs": 4933,               // number, total wall time
   "driverCost": 0.0001,            // number, USD — driver (executor) LLM only
@@ -322,13 +335,17 @@ One CLI call. The verdict comes back as a short structured envelope the next age
   "driverTokens": 1424,            // number, driver total tokens (input + output, incl. cache)
   "verifierTokens": 320,           // number, verifier total tokens (0 if verifier didn't run)
   "totalTokens": 1744,             // number, driverTokens + verifierTokens
+  "verifierMode": "checks",        // string | null — "checks" (claim-based) or "single" (fallback single-call verification)
   "finalUrl": "https://...",       // string
   "finalScreenshot": "final.jpg",  // string, optional — relative to --evidence-dir
-  "warnings": []                   // string[], may include verifier-fallback notices; often empty
+  "checks": [                      // array — one entry per verified claim; empty when verifierMode is "single"
+    { "claim": "...", "verdict": "yes", "evidence": "..." }  // verdict: yes | no | unknown ("unknown" passes with a warning)
+  ],
+  "warnings": []                   // string[], includes "unverified claim: ..." entries and verifier-fallback notices; often empty
 }
 ```
 
-A `done` event is emitted even on `outcome: fail` and `outcome: error` — the envelope shape is stable; only `outcome` and `evidence` differ.
+A `done` event is emitted even on `outcome: fail` and `outcome: error` — the envelope shape is stable; only verdict fields differ. Humans should read `humanEvidence`; automation and debugging should use `outcome`, `checks`, and `evidence`.
 
 Pipe-friendly recipes:
 

@@ -1,7 +1,7 @@
 # QAgent consumer changelog
 
-This document covers consumer-facing changes made from **2026-07-06 through
-2026-07-13**, including the uncommitted working tree inspected on 2026-07-13.
+This document covers consumer-facing changes released from **2026-07-06 through
+2026-07-13** in `v0.7.0` and `v0.8.0`.
 It is written for services that invoke the `qagent` CLI, consume its JSON or
 NDJSON output, or call `runQAgent()` directly.
 
@@ -10,24 +10,20 @@ NDJSON output, or call `runQAgent()` directly.
 | Change set | Availability |
 |---|---|
 | Screenshot evidence | Released in `v0.7.0` |
-| Commits after `v0.7.0` | Committed, but not included in a release yet |
-| Working-tree changes | Uncommitted; not available from npm or a Git commit |
+| Claim verification, locale, recovery, and human verdicts | Released in `v0.8.0` |
 
-`v0.7.0` points to commit `faf1d35`. The 13 commits after it require a future
-release or a dependency pinned to the relevant Git commit. The working-tree
-changes require the local patch as well; pinning the current commit is not
-enough.
+`v0.7.0` points to commit `faf1d35`. `v0.8.0` points to commit `b9a73d7` and
+contains the 15 commits made after `v0.7.0`.
 
 ## Migration checklist
 
 - Keep using `outcome` as the authoritative `pass`, `fail`, or `error` result.
-- Allow additive JSON fields. Current committed output can contain
-  `finalScreenshot`, `checks`, and `verifierMode`; JSON and trace payloads also
-  contain `locale`. The uncommitted output additionally contains
-  `humanEvidence`.
+- Allow additive JSON fields. Output can contain `finalScreenshot`, `checks`,
+  `verifierMode`, and `humanEvidence`; JSON and trace payloads also contain
+  `locale`.
 - Allow `goBack` in the `action.action` union of streamed turn events.
-- Use `checks` and compact `evidence` for automation and debugging. With the
-  uncommitted changes, use `humanEvidence ?? evidence` for text shown to people.
+- Use `checks` and compact `evidence` for automation and debugging. Use
+  `humanEvidence ?? evidence` for text shown to people.
 - Do not interpret `verifierMode: "single"` and `checks: []` as "nothing was
   checked". It means claim decomposition failed and QAgent used its older
   single-call verifier.
@@ -35,9 +31,9 @@ enough.
   `verdict: "unknown"` currently produces a warning but does not fail the run.
 - Do not match browser-action error strings exactly. Overlay errors now include
   page text, available controls, and recovery guidance.
-- Revisit verifier budgets and timeouts. Verification now uses one decomposition
-  call plus one call per claim. The uncommitted human summary adds another call
-  after successful claim checks.
+- Revisit verifier budgets and timeouts. Verification uses one decomposition
+  call plus one call per claim and one human-summary call after successful
+  claim checks.
 - Write goals as stable, visibly checkable claims. Prefer named UI text, items,
   URLs, and dialog contents over vague states, volatile counts, or mandatory
   retry wording.
@@ -113,11 +109,11 @@ trace payloads, and the final NDJSON event:
 Any `no` claim fails the run. `unknown` claims pass with warnings. Consumers
 that require proof for every claim must reject `unknown` themselves.
 
-### Human-facing verdict (uncommitted)
+### Human-facing verdict
 
-The working tree adds `humanEvidence` to direct results, JSON, trace payloads,
-and the final NDJSON event. It separates presentation text from the compact,
-stable verifier aggregate:
+Version `0.8.0` adds `humanEvidence` to direct results, JSON, trace payloads, and
+the final NDJSON event. It separates presentation text from the compact, stable
+verifier aggregate:
 
 ```js
 const messageForUser = result.humanEvidence ?? result.evidence;
@@ -156,7 +152,7 @@ in the `v0.7.0` tag.
 **Consumer action:** Upgrade to `@qagent/cli@0.7.0` for screenshot evidence.
 None of the July 10 changes below are part of that npm version.
 
-### 2026-07-10 — committed but unreleased
+### 2026-07-10 — released in `v0.8.0`
 
 #### [`1c24876` — Wait through busy snapshots when settling](https://github.com/haukebri/QAgent/commit/1c24876b63ae5af8ea4adb3182e7dabbce23d0d0)
 
@@ -274,10 +270,9 @@ driver can use this information to dismiss the overlay.
 **Consumer action:** Treat action errors as opaque diagnostic text. Replace
 exact string comparisons with error presence or a stable prefix check.
 
-## Uncommitted working-tree changes — 2026-07-13
+## Release `v0.8.0` — 2026-07-13
 
-These changes are present locally but are not in `4d79ead`, `v0.7.0`, or any
-published npm package.
+These changes landed in commit `f8fbc03` and are included in `v0.8.0`.
 
 ### Human verdict summaries
 
@@ -323,11 +318,21 @@ Produkte anzeigen"` when only the button and its effect matter.
 
 ### Benchmark runner behavior
 
-The uncommitted `run-tests.sh` runs one instance of each benchmark concurrently
-per iteration, writes trace files under the repository `results/` directory,
-and uses `|| true`, so individual QAgent exit codes no longer determine the
-script's exit status. Its Vorwerk goal also avoids exact and volatile counts.
+The repository-only `run-tests.sh` runs one instance of each benchmark
+concurrently per iteration, writes trace files under the repository `results/`
+directory, and uses `|| true`, so individual QAgent exit codes no longer
+determine the script's exit status. Its Vorwerk goal also avoids exact and
+volatile counts.
 
 **Consumer action:** None for npm or runner users. Services invoking this script
 must read trace outcomes instead of relying on the script exit code and must
 allow three concurrent browser/LLM runs.
+
+### [`b9a73d7` — Release 0.8.0](https://github.com/haukebri/QAgent/commit/b9a73d7)
+
+Bumped the npm package from `0.7.0` to `0.8.0` and published the changes above
+under the `v0.8.0` tag.
+
+**Consumer action:** Upgrade to `@qagent/cli@0.8.0` for claim-based
+verification, browser locale support, recovery improvements, structured human
+verdicts, and automatic overlay dismissal.

@@ -159,7 +159,7 @@ These are observed minimums on real-world targets — pages with grouped fields,
 | Provider | Model | Status | Est. cost for ~12 step run | Notes |
 |---|---|---|---|---|
 | OpenRouter | `google/gemma-4-26b-a4b-it` | ✅ recommended | ~$0.008 | 5/5 = 100% on a multi-required-field form (~50s wall time). Cheapest passing option observed. Handles grouped fields and checkbox arrays cleanly. |
-| OpenRouter | `qwen/qwen3.5-flash-02-23` | ✅ recommended | ~$0.018 | 4/5 = 80% on the same form (~45s wall time). The one failure was a flaky cookie/privacy overlay blocking the form, not a model error. Driver occasionally emits a `fail` verdict on a successfully submitted page; the verifier overrides correctly. |
+| OpenRouter | `qwen/qwen3.5-flash-02-23` | ✅ recommended | ~$0.018 | 4/5 = 80% on the same form (~45s wall time). The measured failure was a cookie/privacy overlay; `v0.8.0` added automatic recovery for click-blocking overlays. Driver occasionally emits a `fail` verdict on a successfully submitted page; the verifier overrides correctly. |
 | OpenAI | `gpt-4.1-mini` | ✅ recommended | ~$0.05 | 5/5 = 100% on a multi-required-field form (~30s wall time). Slightly faster wall time than gemma but ~6× the cost. |
 | OpenAI | `gpt-4.1-nano` | ❌ not viable | $0.02–$0.06 (wasted, runs loop until `--max-turns`) | Misses required checkboxes and confuses grouped fields (e.g. `First` vs `Last` name) regardless of prompt. ~0% success on multi-field forms. As verifier it also false-negatives on pages where a success message and a stale validation banner co-exist. |
 

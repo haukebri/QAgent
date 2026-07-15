@@ -119,7 +119,9 @@ function ndjsonReporter() {
       const envelope = {
         event: 'done',
         goal: ctx.goal,
+        goalContract: result.goalContract ?? null,
         outcome: result.outcome,
+        failureKind: result.failureKind ?? null,
         evidence: result.evidence,
         humanEvidence: result.humanEvidence ?? null,
         turns: result.turns,
@@ -134,6 +136,8 @@ function ndjsonReporter() {
         finalUrl: result.finalUrl,
         finalScreenshot: result.finalScreenshot,
         checks: result.checks ?? [],
+        excludedItems: result.excludedItems ?? [],
+        browserEvidence: result.browserEvidence ?? { pageStates: [] },
         warnings: result.warnings ?? [],
       };
       process.stdout.write(JSON.stringify(envelope) + '\n');

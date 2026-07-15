@@ -169,7 +169,7 @@ Compose with comma: `--reporter=list,trace`, `--reporter=ndjson`.
 ### 6. AI-agent / Claude Code friendliness
 
 - `--reporter=ndjson` → one JSON event per line on stdout. Each line parseable independently. Errors → stderr.
-- Humans should read `humanEvidence`; automation/debugging should use `outcome`, `checks`, and compact `evidence`.
+- Humans should read deterministic `humanEvidence`; automation/debugging should use `outcome`, `checks`, and compact `evidence`.
 - **Stable exit codes:**
   - `0` — goal passed
   - `1` — goal failed (verifier said `fail`)

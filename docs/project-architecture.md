@@ -38,8 +38,10 @@ Browser surface. `observe(page)` returns Playwright's ai-mode ariaSnapshot YAML
 with refs baked in as `[ref=eN]`. `click`, `fill`, `selectOption`, `pressKey`,
 and `type` resolve refs via `aria-ref=${ref}` and mutate the page. Before each
 referenced action, the executor records a semantic target plus unique
-Playwright/CSS locator candidates. Refs remain internal and are stripped from
-public events and results. `navigate` is used by `runner.js` for
+Playwright/CSS locator candidates. The same action record also carries a stable
+evidence ID, before/after page-state IDs, explicit success, native control state
+when exposed, nearby group/question context, and bounded visible-text changes.
+Refs remain internal and are stripped from public events and results. `navigate` is used by `runner.js` for
 setup/pre-navigation; it is not exposed as a driver action.
 
 ### executor.js
@@ -49,20 +51,24 @@ current accessibility snapshot while scrubbing older snapshots, asks the driver 
 `pi-agent-core`, executes the local Playwright action, records history, detects
 repeated no-progress actions, constrains unsafe browser-back recovery, and exits
 on `done`, `fail`, stuck, timeout, or turn cap. Driver terminal messages are
-evidence only. When `evidenceDir` is set, it saves viewport JPEGs before executed
-browser actions and once at the final page state. The final outcome is still
-decided by `verifier.js`.
+evidence only. Initial and terminal states use the same bounded
+settle-and-freeze boundary; the final URL, snapshot, and failure screenshot are
+captured before verification. When `evidenceDir` is set, it saves viewport
+JPEGs before executed browser actions and once at that frozen final state. The
+final outcome is still decided by `verifier.js`.
 
 ### verifier.js
 
-End-state judge. It decomposes the goal into checkable claims, checks each claim
-against the frozen action history/final state, and passes only when every claim
-has concrete positive evidence. It aggregates the authoritative
-`outcome` plus compact `evidence`, then makes one final prose-only LLM call for
-`humanEvidence`. Structured `checks` and `evidence` are kept for debug/automation;
-the list reporter shows `humanEvidence`. It retries provider/parse failures and
-falls back to the older single-call judge if claim decomposition fails. Does not
-call Playwright; the executor freezes state and passes it in.
+End-state judge. It decomposes only the shared binding goal into source-quoted
+assertions and non-binding instructions. Each assertion receives relevant stable
+action/page-state evidence IDs; exact copy, exact URLs, action success, and native
+control facts are resolved locally. Semantic checks may cite only supplied IDs,
+and verdicts are derived from validated support/contradiction sets rather than
+prose. A required contradiction or unknown fails. Invalid source/evidence
+grounding is a verifier protocol error after retry; ordinary decomposition
+provider/parse failure retains the binding-goal single-call fallback. Existing
+`outcome`, `checks`, `evidence`, and `humanEvidence` remain authoritative and
+compatible, with additive source, citation, and `failureKind` metadata.
 
 ### llm-auth.js
 
@@ -110,10 +116,11 @@ the human-facing `humanEvidence`; JSON, NDJSON, and trace payloads include both
 ```
 CLI goal + URL
   -> config/provider/API-key resolution
-  -> public runner
+  -> public runner creates one shared goal contract
   -> browser launch + pre-navigate
+  -> executor receives full guidance + binding verification goal
   -> executor loop: observe/settle -> LLM JSON action -> local tool
-  -> verifier checks claims + summarizes human verdict
+  -> verifier checks only the shared binding goal + summarizes human verdict
   -> reporters emit list/json/ndjson/trace output
 ```
 

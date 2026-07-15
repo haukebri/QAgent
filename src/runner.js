@@ -2,6 +2,7 @@ import { launchPage } from './browser.js';
 import { ConfigError } from './config.js';
 import { createEvidenceRecorder } from './evidence.js';
 import { runTodo } from './executor.js';
+import { createGoalContract } from './goal-contract.js';
 import { navigate } from './tools.js';
 
 export async function runQAgent({
@@ -27,6 +28,7 @@ export async function runQAgent({
     throw new ConfigError('resolveRequestAuth is required');
   }
 
+  const goalContract = createGoalContract(goal);
   const { startUrl, httpCredentials } = parseStartUrl(url);
   const evidence = createEvidenceRecorder(evidenceDir, { maxTurns });
   await onStart?.({ url: startUrl });
@@ -46,7 +48,7 @@ export async function runQAgent({
       try {
         result = await runTodo(
           page, goal, model, resolveRequestAuth, maxTurns, verifierModel, onTurn,
-          testTimeoutMs, actionTimeoutMs, evidence,
+          testTimeoutMs, actionTimeoutMs, evidence, goalContract,
         );
       } catch (err) {
         result = await buildErrorResult(err, page, tRun, evidence);
@@ -58,7 +60,7 @@ export async function runQAgent({
     await browser?.close();
   }
 
-  return result;
+  return { goal, goalContract, ...result };
 }
 
 function parseStartUrl(rawUrl) {
@@ -88,6 +90,7 @@ async function buildErrorResult(err, page, startedAt, evidence, prefix = 'runner
   const finalScreenshot = await evidence?.captureFinal(page);
   return {
     outcome: 'error',
+    failureKind: 'technical',
     evidence: `${prefix}: ${err.message.split('\n')[0]}`,
     llmVerdict: null,
     turns: 0,

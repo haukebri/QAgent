@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { Agent } from '@earendil-works/pi-agent-core';
 import { streamWithRequestAuth } from './llm-auth.js';
-import { observe, inspectTarget, click, fill, selectOption, pressKey, type, goBack } from './tools.js';
+import { observe, visibleText, inspectTarget, inspectTargetState, click, fill, selectOption, pressKey, type, goBack } from './tools.js';
 import { verify } from './verifier.js';
 import { extractJsonObject } from './json.js';
+import { createGoalContract } from './goal-contract.js';
 import { observeWithSettle, observeForVerdict, compactObservation, formatPreviousActionResult } from './observe-settle.js';
 
 const SNAPSHOT_BEGIN = '<<SNAPSHOT_BEGIN>>';
@@ -38,6 +39,7 @@ const SYSTEM_PROMPT =
   'Pick "done" when the goal is clearly complete — include a "summary" that answers any question the goal asked for. ' +
   'Before choosing done, re-read the most recent observation. If it contains error, validation, or failure messages related to your goal, the task is NOT done — resolve them (fix fields, resubmit, dismiss and retry) instead. Your done summary must not contradict the observation. ' +
   'If the current page does not match the goal, re-read the snapshot and recover only with actions allowed by the goal. Explicit goal constraints govern recovery. ' +
+  'Exact named products, values, URLs, routes, prohibitions, and mandatory steps are binding unless the goal explicitly permits alternatives: never substitute a similar alternative; after allowed recovery, fail with concrete evidence if exact compliance is impossible. ' +
   'Pick "fail" only when the goal is impossible and you have attempted recovery, or when no recovery action exists; include what you tried in the "reason". ' +
   "Don't fabricate: if you cannot literally verify what the goal asks for, use \"fail\".\n\n" +
   'Element heuristics: prefer refs labelled `link` (which show a `- /url: …` line) or ' +
@@ -70,7 +72,9 @@ export async function runTodo(
   testTimeoutMs = 300_000,
   actionTimeoutMs = 2_000,
   evidenceRecorder = null,
+  suppliedGoalContract = null,
 ) {
+  const goalContract = suppliedGoalContract ?? createGoalContract(goal);
   const t0 = Date.now();
   const emitTurn = entry => onTurn?.(toPublicStep(entry));
 
@@ -89,7 +93,24 @@ export async function runTodo(
   let verdict = null;
   let fatalError = null;
   let wallClockExpired = false;
+  let terminalEntry = null;
   let finalSnapshot = '';
+  let finalUrl = '';
+  let finalVisibleText = '';
+  let observed = false;
+  let actionSequence = 0;
+  let observationSequence = 0;
+  let currentObservationId = null;
+  const pageStates = [];
+  const recordPageState = (snapshot, url, text) => {
+    const state = { id: `page-${++observationSequence}`, url, visibleText: text };
+    pageStates.push(state);
+    currentObservationId = state.id;
+    finalSnapshot = snapshot;
+    finalUrl = url;
+    finalVisibleText = text;
+    return state.id;
+  };
   const recentRefActions = [];
   const warnedSignatures = new Set();
   let pendingRefAction = null;
@@ -109,26 +130,36 @@ export async function runTodo(
         const settle = await observeWithSettle(page, {
           previousSnapshot: prev.snapshot,
           previousUrl: prev.url,
+          previousVisibleText: prev.visibleText,
         });
         snapshot = settle.snapshot;
         url = settle.url;
         observation = settle;
-        prev.actionEntry.observation = compactObservation(observation);
+        const observationId = recordPageState(snapshot, url, settle.visibleText);
+        prev.actionEntry.afterObservationId = observationId;
+        prev.actionEntry.observation = { id: observationId, ...compactObservation(observation) };
+      } else if (!observed) {
+        const settle = await observeWithSettle(page, null);
+        snapshot = settle.snapshot;
+        url = settle.url;
+        recordPageState(snapshot, url, settle.visibleText);
+        observation = null;
       } else {
-        // Turn 1, or a retry turn after parse-error / ref-miss / done-rejected
-        // (no new performed action since the last observation).
+        // Retry turn after parse-error or ref-miss (no performed action since
+        // the last settled observation).
         snapshot = await observe(page);
         url = page.url();
+        recordPageState(snapshot, url, await visibleText(page));
         observation = null;
       }
-      finalSnapshot = snapshot;
+      observed = true;
       const currentHistoryIndex = await browserHistoryIndex(page);
       if (initialHistoryIndex != null && currentHistoryIndex != null) {
         reversibleNavigations = Math.max(0, currentHistoryIndex - initialHistoryIndex);
       }
 
       if (pendingRefAction && observation) {
-        const noProgress = !observation.urlChanged && !observation.snapshotChanged;
+        const noProgress = !observation.urlChanged && !observation.snapshotChanged && !nativeActionSatisfied(pendingRefAction.entry);
         recentRefActions.push({ sig: pendingRefAction.sig, noProgress });
         if (recentRefActions.length > STUCK_WINDOW) recentRefActions.shift();
 
@@ -155,7 +186,7 @@ export async function runTodo(
       const previousActionResult = observation && history.length > 0
         ? formatPreviousActionResult(history[history.length - 1], observation, snapshot, url)
         : null;
-      const { action, usage, parseError, llmError } = await askNextAction({ agent, goal, url, snapshot, lastError, previousActionResult, recentActions });
+      const { action, usage, parseError, llmError } = await askNextAction({ agent, goalContract, url, snapshot, lastError, previousActionResult, recentActions });
       if (usage) {
         tokens.input += usage.input ?? 0;
         tokens.output += usage.output ?? 0;
@@ -184,64 +215,28 @@ export async function runTodo(
       }
 
       if (action.action === 'done') {
-        // Freeze one final settled sample without rewriting the preceding
-        // action's already-recorded observation.
-        let terminalObs = null;
-        try {
-          const settle = await observeForVerdict(page, prev
-            ? { previousSnapshot: snapshot, previousUrl: url }
-            : { previousSnapshot: null, previousUrl: null });
-          terminalObs = settle;
-          finalSnapshot = settle.snapshot;
-        } catch {
-          // Best-effort. If settle throws, fall back to the pre-settle snapshot
-          // already captured at the top of this turn.
-        }
-
         verdict = { action: 'done', summary: action.summary ?? null, reason: null };
-        const doneEntry = { turn: turns, atMs: Date.now() - t0, action, url: page.url() };
-        if (terminalObs) {
-          doneEntry.observation = { ...compactObservation(terminalObs), terminal: true };
-        }
+        const doneEntry = { turn: turns, atMs: Date.now() - t0, action, url };
         if (usage) doneEntry.tokens = stepTokens(usage);
         history.push(doneEntry);
-        await emitTurn(doneEntry);
+        terminalEntry = doneEntry;
         break;
       }
 
       if (action.action === 'fail') {
-        // Same terminal-settle treatment as `done` — but only when there was
-        // a recent mutating action (prev != null). On a turn-1 fail or after
-        // retry-only turns there's nothing to wait for; the LLM is calling
-        // it impossible based on what's already on screen.
-        let terminalObs = null;
-        if (prev) {
-          try {
-            const settle = await observeForVerdict(page, {
-              previousSnapshot: snapshot,
-              previousUrl: url,
-            });
-            terminalObs = settle;
-            finalSnapshot = settle.snapshot;
-          } catch {
-            // Best-effort.
-          }
-        }
         verdict = {
           action: 'fail',
           summary: null,
           reason: action.reason ?? null,
         };
-        const verdictEntry = { turn: turns, atMs: Date.now() - t0, action, url: page.url() };
-        if (terminalObs) {
-          verdictEntry.observation = { ...compactObservation(terminalObs), terminal: true };
-        }
+        const verdictEntry = { turn: turns, atMs: Date.now() - t0, action, url };
         if (usage) verdictEntry.tokens = stepTokens(usage);
         history.push(verdictEntry);
-        await emitTurn(verdictEntry);
+        terminalEntry = verdictEntry;
         break;
       }
 
+      const evidenceId = `action-${++actionSequence}`;
       let targetInfo = null;
       if (REF_ACTIONS.has(action.action) && action.ref) {
         if (!snapshot.includes(`[ref=${action.ref}]`)) {
@@ -250,6 +245,10 @@ export async function runTodo(
             turn: turns,
             atMs: Date.now() - t0,
             action,
+            evidenceId,
+            beforeObservationId: currentObservationId,
+            afterObservationId: currentObservationId,
+            success: false,
             target: 'element no longer present in the current page',
             url,
             error: lastError,
@@ -272,6 +271,10 @@ export async function runTodo(
             turn: turns,
             atMs: Date.now() - t0,
             action,
+            evidenceId,
+            beforeObservationId: currentObservationId,
+            afterObservationId: currentObservationId,
+            success: false,
             ...targetInfo,
             url,
             error: `stuck termination: ${prospectiveSig}`,
@@ -283,13 +286,17 @@ export async function runTodo(
         }
       }
 
-      const entry = { turn: turns, atMs: Date.now() - t0, action, ...targetInfo };
+      const entry = {
+        turn: turns, atMs: Date.now() - t0, action, ...targetInfo,
+        evidenceId,
+        beforeObservationId: currentObservationId,
+      };
       if (usage) entry.tokens = stepTokens(usage);
       await addStepScreenshot(entry, evidenceRecorder, page);
       const tAction = Date.now();
       try {
         if (action.action === 'goBack') {
-          const reason = backRecoveryError(goal, reversibleNavigations);
+          const reason = backRecoveryError(goalContract.fullGoal, reversibleNavigations);
           if (reason) throw new Error(reason);
         }
         let recoveredVia = null;
@@ -303,6 +310,8 @@ export async function runTodo(
         else throw new Error(`unknown action: ${action.action}`);
         entry.ms = Date.now() - tAction;
         entry.url = page.url();
+        entry.success = true;
+        if (entry.nativeState) entry.nativeState.after = await inspectTargetState(page, action.ref);
         if (recoveredVia) entry.recoveredVia = recoveredVia;
         history.push(entry);
         await emitTurn(entry);
@@ -312,6 +321,8 @@ export async function runTodo(
         entry.ms = Date.now() - tAction;
         entry.url = page.url();
         entry.error = msg;
+        entry.success = false;
+        if (entry.nativeState) entry.nativeState.after = await inspectTargetState(page, action.ref);
         history.push(entry);
         await emitTurn(entry);
         lastError = msg;
@@ -323,45 +334,62 @@ export async function runTodo(
           urlAfter: entry.url,
           actionName: action.action,
           ref: action.ref,
+          entry,
         };
       }
-      prev = { snapshot, url, actionEntry: entry };
+      prev = { snapshot, url, visibleText: finalVisibleText, actionEntry: entry };
     } catch (err) {
       fatalError = err.message.split('\n')[0];
       break;
     }
   }
 
-  // If the loop ended without a follow-up turn (turn cap, wall-clock timeout,
-  // stuck stage-2 termination, fatal error), the last performed action's
-  // observation was never captured. Run one final pass so analysts see what
-  // that action did.
-  if (prev && prev.actionEntry.observation == null) {
+  // Every exit shares one bounded settle-and-freeze boundary. The verifier and
+  // persisted failure evidence only receive values captured before it runs.
+  try {
+    const frozen = await observeForVerdict(page, observed
+      ? { previousSnapshot: finalSnapshot, previousUrl: finalUrl, previousVisibleText: finalVisibleText }
+      : null);
+    finalSnapshot = frozen.snapshot;
+    finalUrl = frozen.url;
+    finalVisibleText = frozen.visibleText;
+    const finalObservationId = recordPageState(finalSnapshot, finalUrl, finalVisibleText);
+    pageStates.at(-1).final = true;
+    const lastEntry = history.at(-1);
+    if (lastEntry?.action?.action === 'done' || lastEntry?.action?.action === 'fail') {
+      lastEntry.url = finalUrl;
+      lastEntry.observation = { id: finalObservationId, ...compactObservation(frozen), terminal: true };
+    } else if (prev && prev.actionEntry.observation == null) {
+      prev.actionEntry.afterObservationId = finalObservationId;
+      prev.actionEntry.observation = { id: finalObservationId, ...compactObservation(frozen) };
+    }
+  } catch {
+    // Best-effort; keep the latest complete sample if the page disappeared.
+    try { finalUrl = page.url(); } catch {}
+  }
+
+  const frozenScreenshot = await captureScreenshot(page);
+  const finalScreenshot = await evidenceRecorder?.captureFinal(page);
+  const elapsedMs = Date.now() - t0;
+  if (terminalEntry) {
     try {
-      const settle = await observeWithSettle(page, {
-        previousSnapshot: prev.snapshot,
-        previousUrl: prev.url,
-      });
-      prev.actionEntry.observation = compactObservation(settle);
-      finalSnapshot = settle.snapshot;
-    } catch {
-      // Best-effort; do not let a final-observation failure mask a real verdict.
+      await emitTurn(terminalEntry);
+    } catch (err) {
+      fatalError = oneLine(err?.message);
     }
   }
 
-  const finalUrl = page.url();
-  const elapsedMs = Date.now() - t0;
-  const finalScreenshot = await evidenceRecorder?.captureFinal(page);
-
   if (fatalError !== null) {
-    const failureScreenshot = await captureScreenshot(page);
     return {
       outcome: 'error',
+      failureKind: 'technical',
+      goal: goalContract.fullGoal, goalContract,
       evidence: fatalError,
       llmVerdict: sanitizeAction(verdict),
       turns, elapsedMs,
       tokens, verifierTokens: null,
-      finalUrl, finalSnapshot, failureScreenshot,
+      finalUrl, finalSnapshot, failureScreenshot: frozenScreenshot,
+      browserEvidence: { pageStates },
       ...(finalScreenshot ? { finalScreenshot } : {}),
       history: history.map(toPublicStep), warnings,
     };
@@ -387,15 +415,19 @@ export async function runTodo(
   let evidence;
   let humanEvidence;
   let checks = [];
+  let excludedItems = [];
   let verifierMode = null;
   let verifierTokens = null;
+  let failureKind = null;
   try {
-    const result = await verify(goal, verifierVerdict, history, finalUrl, finalSnapshot, judgeModel, resolveRequestAuth);
+    const result = await verify(goalContract.verificationGoal, verifierVerdict, history, finalUrl, finalSnapshot, judgeModel, resolveRequestAuth, { pageStates });
     outcome = result.outcome;
     evidence = result.evidence;
     humanEvidence = result.humanEvidence;
     checks = result.checks ?? [];
+    excludedItems = result.excludedItems ?? [];
     verifierMode = result.verifierMode ?? null;
+    failureKind = result.failureKind ?? null;
     warnings.push(...(result.warnings ?? []));
     verifierTokens = result.tokens;
   } catch (err) {
@@ -404,23 +436,41 @@ export async function runTodo(
     warnings.push(...(err.warnings ?? []));
     warnings.push(`verifier unavailable: ${message}`);
     outcome = 'error';
+    failureKind = err.failureKind ?? 'verifier';
+    verifierTokens = err.tokens ?? null;
     evidence = `verifier unavailable: ${message}`;
     humanEvidence = evidence;
   }
 
-  const failureScreenshot = outcome !== 'pass' ? await captureScreenshot(page) : null;
+  const failureScreenshot = outcome !== 'pass' ? frozenScreenshot : null;
 
   return {
     outcome,
+    failureKind,
+    goal: goalContract.fullGoal, goalContract,
     evidence,
     humanEvidence,
     llmVerdict: sanitizeAction(verdict),
     turns, elapsedMs,
     tokens, verifierTokens,
     finalUrl, finalSnapshot, failureScreenshot,
+    browserEvidence: { pageStates },
     ...(finalScreenshot ? { finalScreenshot } : {}),
-    history: history.map(toPublicStep), warnings, checks, verifierMode,
+    history: history.map(toPublicStep), warnings, checks, excludedItems, verifierMode,
   };
+}
+
+function nativeActionSatisfied(entry) {
+  if (!entry?.success || !entry.nativeState?.after) return false;
+  const { action, nativeState: { after } } = entry;
+  if (action.action === 'click' && after.checked === true) return true;
+  if (action.action === 'fill' || action.action === 'type') return after.inputValue === action.value;
+  if (action.action === 'selectOption') {
+    const wanted = Array.isArray(action.value) ? action.value : [action.value];
+    const selected = Array.isArray(after.selected) ? after.selected : [after.value];
+    return wanted.every(value => selected.includes(value));
+  }
+  return false;
 }
 
 export function backRecoveryError(goal, reversibleNavigations) {
@@ -461,7 +511,7 @@ function stepTokens(usage) {
 }
 
 async function captureScreenshot(page) {
-  return page.screenshot({ fullPage: true }).catch(() => null);
+  return page.screenshot({ fullPage: true, timeout: 5000 }).catch(() => null);
 }
 
 async function addStepScreenshot(entry, evidence, page) {
@@ -500,10 +550,10 @@ function oneLine(value) {
   return String(value ?? 'unknown error').split('\n')[0];
 }
 
-async function askNextAction({ agent, goal, url, snapshot, lastError, previousActionResult, recentActions }) {
+async function askNextAction({ agent, goalContract, url, snapshot, lastError, previousActionResult, recentActions }) {
   const isFirstTurn = agent.state.messages.length === 0;
   const message = isFirstTurn
-    ? buildInitialPrompt({ goal, url, snapshot })
+    ? buildInitialPrompt({ goalContract, url, snapshot })
     : buildFollowUpPrompt({ url, snapshot, lastError, previousActionResult, recentActions });
   await agent.prompt(message);
   const last = [...agent.state.messages].reverse().find(m => m.role === 'assistant');
@@ -577,9 +627,10 @@ function normalizeActionShape(parsed) {
   return { error: `unsupported shorthand "${verb}"` };
 }
 
-function buildInitialPrompt({ goal, url, snapshot }) {
+function buildInitialPrompt({ goalContract, url, snapshot }) {
   return (
-    `Goal: ${goal}\n\n` +
+    `Execution guidance (original goal):\n${goalContract.fullGoal}\n\n` +
+    `Binding verification goal (${goalContract.source}):\n${goalContract.verificationGoal}\n\n` +
     `Current URL: ${url}\n\n` +
     `${SNAPSHOT_BEGIN}\n${snapshot}\n${SNAPSHOT_END}\n\n` +
     `Next action (JSON only):`

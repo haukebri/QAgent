@@ -24,6 +24,7 @@ const pages = {
   '/navigation': `<!doctype html><h1>Navigation start</h1><a href="/wrong">Wrong route</a><a href="/finish">Finish</a>`,
   '/wrong': '<!doctype html><h1>Wrong route</h1>',
   '/finish': '<!doctype html><h1>Navigation complete</h1>',
+  '/products': '<!doctype html><h1>Products</h1><button>Similar VM7</button>',
 };
 
 const server = createServer((req, res) => {
@@ -40,11 +41,18 @@ const ref = (context, pattern) => {
   return match[1];
 };
 const action = fn => context => fauxAssistantMessage(JSON.stringify(fn(context)));
-const verifyYes = claims => [
-  fauxAssistantMessage(JSON.stringify({ claims })),
-  ...claims.map(claim => fauxAssistantMessage(JSON.stringify({ verdict: 'yes', evidence: `Concrete browser evidence verifies: ${claim}` }))),
-  fauxAssistantMessage('{"humanEvidence":"The benchmark goal completed with concrete browser evidence."}'),
-];
+const decomposition = (sourceQuote, comparison = 'semantic') => fauxAssistantMessage(JSON.stringify({
+  items: [{ id: 'claim-1', text: sourceQuote, sourceQuote, kind: 'assertion', comparison }],
+}));
+const citedPage = (support, evidence) => context => {
+  const ids = [...JSON.stringify(context).matchAll(/\\?"id\\?":\s*\\?"(page-[^\\"]+)/g)].map(match => match[1]);
+  return fauxAssistantMessage(JSON.stringify({
+    supportingEvidenceIds: support ? [ids.at(-1)] : [],
+    contradictingEvidenceIds: support ? [] : [ids.at(-1)],
+    evidence,
+  }));
+};
+const verifyYes = sourceQuote => [decomposition(sourceQuote), citedPage(true, `Concrete browser evidence verifies: ${sourceQuote}`)];
 
 const definitions = [
   {
@@ -52,7 +60,7 @@ const definitions = [
     responses: [
       action(context => ({ action: 'click', ref: ref(context, 'button \\"Continue\\"') })),
       fauxAssistantMessage('{"action":"done","summary":"Step two complete is visible."}'),
-      ...verifyYes(['Continue led to the visible Step two complete state']),
+      ...verifyYes('Step two complete is visible.'),
     ],
     complete: result => result.finalSnapshot.includes('Step two complete'),
   },
@@ -67,10 +75,22 @@ const definitions = [
       }),
       action(context => ({ action: 'click', ref: ref(context, 'button \\"Save\\"') })),
       fauxAssistantMessage('{"action":"done","summary":"Both named groups were selected and saved."}'),
-      ...verifyYes(['Same was selected in Work pattern', 'Same was selected in Travel pattern', 'Groups complete is visible']),
+      ...verifyYes('Groups complete.'),
     ],
     complete: result => result.finalSnapshot.includes('Groups complete') &&
       result.history.filter(step => step.target?.includes('radio "Same" in fieldset')).length === 2,
+  },
+  {
+    name: 'exact-product', path: '/products', expectedOutcome: 'fail',
+    goal: 'Add the exact PB440 product. Do not substitute a similar product; fail if PB440 is unavailable.',
+    responses: [
+      fauxAssistantMessage('{"action":"fail","reason":"PB440 is unavailable; only Similar VM7 is offered."}'),
+      decomposition('Add the exact PB440 product.'),
+      citedPage(false, 'The page offers only Similar VM7, not PB440.'),
+    ],
+    complete: () => false,
+    satisfied: result => result.llmVerdict?.action === 'fail' &&
+      !result.history.some(step => step.action?.action === 'click'),
   },
   {
     name: 'navigation-recovery', path: '/navigation', goal: 'Recover from a wrong route with browser back, then reach Navigation complete.',
@@ -79,7 +99,7 @@ const definitions = [
       fauxAssistantMessage('{"action":"goBack"}'),
       action(context => ({ action: 'click', ref: ref(context, 'link \\"Finish\\"') })),
       fauxAssistantMessage('{"action":"done","summary":"Navigation complete is visible."}'),
-      ...verifyYes(['browser back recovered from the wrong route', 'Navigation complete is visible']),
+      ...verifyYes('Navigation complete.'),
     ],
     complete: result => result.finalSnapshot.includes('Navigation complete') &&
       result.history.some(step => step.action?.action === 'goBack' && !step.error),
@@ -89,7 +109,7 @@ const definitions = [
         fauxAssistantMessage('{"action":"goBack"}'),
         action(context => ({ action: 'click', ref: ref(context, 'link \\"Finish\\"') })),
         fauxAssistantMessage('{"action":"done","summary":"Navigation complete is visible without browser back."}'),
-        ...verifyYes(['Navigation complete is visible without browser-back recovery']),
+        ...verifyYes('Navigation complete'),
       ],
       complete: result => result.finalSnapshot.includes('Navigation complete') && (live
         ? result.history.every(step => step.action?.action !== 'goBack')
@@ -110,9 +130,12 @@ async function execute(definition, suffix = '') {
       maxTurns: 8,
       testTimeoutMs: 30_000,
     });
+    const completed = definition.complete(result);
     return {
       name: `${definition.name ?? 'navigation-recovery'}${suffix}`,
-      completed: definition.complete(result),
+      completed,
+      behaviorSatisfied: definition.satisfied?.(result) ?? completed,
+      expectedOutcome: definition.expectedOutcome ?? 'pass',
       outcome: result.outcome,
       turns: result.turns,
       elapsedMs: result.elapsedMs,
@@ -149,11 +172,12 @@ try {
 
 const median = values => values.sort((a, b) => a - b)[Math.floor(values.length / 2)] ?? 0;
 const completed = results.filter(result => result.completed).length;
-const falsePasses = results.filter(result => result.outcome === 'pass' && !result.completed).length;
+const behaviorSatisfied = results.filter(result => result.behaviorSatisfied).length;
+const falsePasses = results.filter(result => result.outcome === 'pass' && (result.expectedOutcome !== 'pass' || !result.completed)).length;
 const summary = {
   scenarios: results.length,
   goalCompletionRate: `${completed}/${results.length}`,
-  correctVerdicts: results.filter(result => (result.outcome === 'pass') === result.completed).length,
+  correctVerdicts: results.filter(result => result.behaviorSatisfied && result.outcome === result.expectedOutcome).length,
   falsePasses,
   technicalTerminations: results.filter(result => result.technical).length,
   medianTurns: median(results.map(result => result.turns)),
@@ -161,4 +185,4 @@ const summary = {
   medianCost: median(results.map(result => result.cost)),
 };
 process.stdout.write(`${JSON.stringify({ results, summary }, null, 2)}\n`);
-if (falsePasses || completed !== results.length || summary.technicalTerminations) process.exit(1);
+if (falsePasses || behaviorSatisfied !== results.length || summary.correctVerdicts !== results.length || summary.technicalTerminations) process.exit(1);

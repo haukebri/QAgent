@@ -165,7 +165,7 @@ These are observed minimums on real-world targets — pages with grouped fields,
 
 Cost notes:
 - Costs above are observed on a Gravity Forms multi-required-field test page; expect variation by snapshot size and turn count. Each turn sends one complete current accessibility snapshot to the driver and scrubs older snapshots, so denser pages cost more per turn.
-- The verifier runs at the end (or on `done`/`fail`): one call to decompose the goal into claims, then one check per claim. The calls share the run transcript as a common prefix, so provider prompt caching keeps the added cost small; goals with more steps mean more (cheap) check calls.
+- The verifier runs at the end (or on `done`/`fail`): one call to decompose the goal into claims, then one check per claim. Human verdict text is formatted locally from those checks, with no summary-model call. The calls share the run transcript as a common prefix, so provider prompt caching keeps the added cost small; goals with more steps mean more (cheap) check calls.
 - `--max-turns` (default 50) is the hard cap on driver spend; reduce it to bound worst-case cost on flaky models or pages.
 
 Rule of thumb: if the page has more than ~3 required fields, more than one input type, or any group/checkbox-array pattern, do not use a `nano`-class model for the driver.
@@ -178,6 +178,45 @@ Whether you or your coding agent writes the goal, the rules are the same. A good
 
 The verifier breaks your goal into individual claims and checks each against the whole run — the actions taken, how the page changed after each one, and the final state. Each claim comes back `yes`, `no`, or `unknown`. A pass requires `yes` for every claim; `no` and unverified `unknown` claims fail with concrete evidence. So the craft is: **write every step as something the browser can visibly confirm.**
 
+### Your wording sets the verification scope
+
+More detail does not automatically make a test better. It makes more things
+required. Use broad language when you want to check general functionality, and
+exact language only when the detail itself matters.
+
+For a functional test, this is enough:
+
+> `Click the button that says something like "Get started", complete the form, and pass when "Your starting point" is visible.`
+
+For a copy test, make the exact requirement explicit:
+
+> `The button text must be exactly "Get started" and the result page must display exactly "Your starting point".`
+
+Both goals are valid, but they answer different questions. The first checks
+whether a user can complete the flow. The second also checks the approved copy.
+Do not add exact wording, routes, counts, or intermediate steps unless a mismatch
+should fail the test.
+
+When a goal needs detailed driver guidance that should not become part of the
+verdict, write `Only the Acceptance section is binding.` and add an exact
+`Acceptance:` heading. QAgent keeps the full goal for execution and verifies
+only that section. Without both explicit markers, the full goal remains binding.
+
+Precision is not the same as accuracy. A precisely written expectation can
+still be wrong or impossible to prove. Browser tests can verify a displayed
+result, but they usually cannot prove which hidden business rule caused it.
+Assert the visible outcome unless the page also exposes the reason.
+
+For important flows, use a small ladder of separate tests:
+
+1. A smoke test checks that the general journey reaches the expected outcome.
+2. A functional test adds required inputs, constraints, and result values.
+3. A copy test checks the few strings that must match word for word.
+
+This makes failures easier to diagnose. If the smoke test fails, the journey is
+broken. If smoke and functionality pass but the copy test fails, the product
+still works and the mismatch is in the text or its expectation.
+
 ### The most important hint: a literal success signal
 
 Replace vague end-states ("I will see the result page") with the literal text or visible element that actually appears on success. Many forms render an inline confirmation rather than navigating to a new page; if your goal says "result page" the driver will keep retrying after success and the verifier has nothing to match.
@@ -188,10 +227,11 @@ Replace vague end-states ("I will see the result page") with the literal text or
 
 ### Write steps as checkable claims
 
-- **Quote exact UI text — but not volatile parts.** `click "Submit Inquiry"` beats `click the submit button` — the verifier matches the run against your words. Leave dynamic values out of the quote, though: a goal that says `"Weitere 6 Produkte anzeigen"` fails the day the site has 7 products; write `the "Weitere ... Produkte anzeigen" button (the number varies)` instead.
+- **Choose semantic or exact wording deliberately.** For a functional test, `click the button that says something like "Submit Inquiry"` allows harmless wording changes. For a copy test, write `the button text must be exactly "Submit Inquiry"`. Leave volatile values out of exact quotes: a goal that requires `"Weitere 6 Produkte anzeigen"` fails when the site has 7 products; write `the button for showing more products (the number varies)` unless the number itself matters.
 - **Name expected items instead of counting them.** `the section shows "Kobold VM7" and "Kobold VG100+"` is reliably checkable; `exactly two offers` makes a small verifier model count — and miscount.
 - **Describe transient UI by its visible content.** A popup is gone from the final page; `a dialog appears offering "Weiter einkaufen" and "Zur Kasse"` gives the verifier the exact text that shows up when the dialog opens.
 - **Phrase retries and error handling conditionally.** `If the page shows "There was a problem", fix the named fields and submit again` is satisfied by a first-try success; `submit repeatedly until errors are gone` fails a run that never needed a retry.
+- **Treat exact requirements as binding.** Named products, values, routes, URLs, prohibitions, and mandatory steps are not interchangeable with similar alternatives. State permitted alternatives explicitly when either is acceptable.
 - **Assert URLs where they matter.** `which redirects to /shop/cart` is the cheapest, most reliable claim there is.
 
 ### Other patterns that help
@@ -254,7 +294,7 @@ Strategy:
 
 | Name | Output |
 |---|---|
-| `list` (default) | Live human-readable progress with ✓/✗, color, per-turn timing, and the verifier's `humanEvidence` summary |
+| `list` (default) | Live human-readable progress with ✓/✗, color, per-turn timing, and deterministic `humanEvidence` from the verifier checks |
 | `ndjson` | One JSON event per turn streamed to stdout, ending with a `done` envelope |
 | `json` | Single JSON object dumped at the end |
 | `trace` | Writes `results/<YYYY-MM-DDTHH-MM>H<HASH>.json` (path overridable with `--output-dir`); confirmation goes to **stderr** so machine-readable reporters keep stdout clean |

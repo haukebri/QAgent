@@ -32,6 +32,10 @@ test('describes targets with semantic and stable locators', async () => {
         css: 'input[name="email"]',
         frameUrl: null,
       },
+      nativeState: {
+        before: { type: 'text', name: 'email', value: '', checked: false, selected: null, disabled: false, inputValue: '' },
+        after: null,
+      },
     });
     const continueRef = refFor('Continue');
     assert.deepEqual(await inspectTarget(page, continueRef, snapshot), {
@@ -69,7 +73,7 @@ test('distinguishes repeated labels by their nearest accessible group', async ()
     assert.match((await inspectTarget(page, refs[0], snapshot)).target, /in fieldset "Work pattern"$/);
     assert.match((await inspectTarget(page, refs[1], snapshot)).target, /in radiogroup "Travel pattern"$/);
     const looseRef = snapshot.match(/button "Loose" \[ref=(e\d+)\]/)?.[1];
-    assert.equal((await inspectTarget(page, looseRef, snapshot)).target, 'button "Loose"');
+    assert.equal((await inspectTarget(page, looseRef, snapshot)).target, 'button "Loose" in section "Decorative heading"');
   } finally {
     await browser.close();
   }

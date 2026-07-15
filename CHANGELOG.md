@@ -1,7 +1,7 @@
 # QAgent consumer changelog
 
 This document covers consumer-facing changes released from **2026-07-06 through
-2026-07-15** in `v0.7.0` through `v0.9.0`.
+2026-07-15** in `v0.7.0` through `v0.9.0`, plus unreleased `v0.10.0` changes.
 It is written for services that invoke the `qagent` CLI, consume its JSON or
 NDJSON output, or call `runQAgent()` directly.
 
@@ -13,6 +13,7 @@ NDJSON output, or call `runQAgent()` directly.
 | Claim verification, locale, recovery, and human verdicts | Released in `v0.8.0` |
 | Semantic action targets | Released in `v0.8.1` |
 | Proof-complete verification and behavioral reliability | Released in `v0.9.0` |
+| Uniform frozen evidence and exact verifier fidelity | Planned for `v0.10.0` |
 
 `v0.7.0` points to commit `faf1d35`. `v0.8.0` points to commit `b9a73d7` and
 contains the 15 commits made after `v0.7.0`.
@@ -21,7 +22,8 @@ contains the 15 commits made after `v0.7.0`.
 
 - Keep using `outcome` as the authoritative `pass`, `fail`, or `error` result.
 - Allow additive JSON fields. Output can contain `finalScreenshot`, `checks`,
-  `verifierMode`, and `humanEvidence`; JSON and trace payloads also contain
+  `verifierMode`, `humanEvidence`, `goalContract`, `browserEvidence`,
+  `failureKind`, and `excludedItems`; JSON and trace payloads also contain
   `locale`.
 - Allow `goBack` in the `action.action` union of streamed turn events.
 - Use `checks` and compact `evidence` for automation and debugging. Use
@@ -33,12 +35,35 @@ contains the 15 commits made after `v0.7.0`.
   returns a failed outcome for it.
 - Do not match browser-action error strings exactly. Overlay errors now include
   page text, available controls, and recovery guidance.
-- Revisit verifier budgets and timeouts. Verification uses one decomposition
-  call plus one call per claim and one human-summary call after successful
-  claim checks.
+- Revisit verifier budgets and timeouts. In `v0.10.0`, verification uses one
+  decomposition call plus one call per claim; human evidence uses no model call.
 - Write goals as stable, visibly checkable claims. Prefer named UI text, items,
   URLs, and dialog contents over vague states, volatile counts, or mandatory
   retry wording.
+
+## v0.10.0 — unreleased
+
+- Driver and verifier now share one auditable goal contract; tests that
+  explicitly bind only an Acceptance section are verified against that section
+  while retaining the full goal as execution guidance.
+- Action evidence now records stable IDs, control-group context, resulting
+  native state, and bounded visible-text changes, improving both driver progress
+  detection and verifier accuracy.
+- Verifier claims are now grounded in the shared goal and stable evidence IDs;
+  deterministic browser facts are checked locally, while the LLM is limited to
+  semantic judgments.
+- Initial and terminal browser states now share one bounded settle-and-freeze
+  boundary, and persisted screenshots match the evidence judged by the
+  verifier.
+- The driver now treats exact named products, values, routes, URLs, and required
+  steps as binding constraints instead of substituting similar alternatives.
+- Conditional goal requirements now preserve their trigger during verification,
+  so untriggered branches are not treated as unconditional missing actions.
+- Verifier checks now separate recorded actions, the driver final response, and
+  the final snapshot, preventing visible controls from being mistaken for
+  clicks while allowing final-summary requirements to inspect the actual text.
+- Human verdict text is now generated deterministically from authoritative
+  claim checks, eliminating contradictory prose and one verifier model call.
 
 ## v0.9.0 — 2026-07-15
 

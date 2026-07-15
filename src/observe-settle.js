@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { observe } from './tools.js';
+import { observe, visibleText } from './tools.js';
 
 function sliceSections(yaml) {
   const lines = yaml.split('\n');
@@ -144,7 +144,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 async function safeObserve(page) {
   try {
-    return { snapshot: await observe(page), url: page.url(), ok: true };
+    return { snapshot: await observe(page), visibleText: await visibleText(page), url: page.url(), ok: true };
   } catch (err) {
     return { snapshot: null, url: null, ok: false, err };
   }
@@ -163,6 +163,7 @@ export async function observeWithSettle(page, prev, opts = {}) {
   const maxSettleMs = opts.maxSettleMs ?? 3000;
   const previousSnapshot = prev?.previousSnapshot ?? null;
   const previousUrl = prev?.previousUrl ?? null;
+  const previousVisibleText = prev?.previousVisibleText ?? '';
   const prevFp = previousSnapshot ? fingerprint(previousSnapshot) : null;
   const changeGraceMs = opts.changeGraceMs ?? Math.min(1000, maxSettleMs);
   const changedFromBaseline = sample => prevFp != null && (
@@ -173,6 +174,13 @@ export async function observeWithSettle(page, prev, opts = {}) {
   let initialUrl = '';
   try { initialUrl = page.url(); } catch {}
   let last = await safeObserve(page);
+  const visibleTextSeen = new Set();
+  const rememberVisibleText = sample => {
+    for (const line of sample.visibleText?.split('\n') ?? []) {
+      if (line && !previousVisibleText.split('\n').includes(line)) visibleTextSeen.add(line);
+    }
+  };
+  if (last.ok) rememberVisibleText(last);
   let settled = false;
   let departed = last.ok && changedFromBaseline(last);
   let matchStreak = last.ok && !isBusySnapshot(last.snapshot) && (prevFp == null || departed) ? 1 : 0;
@@ -198,6 +206,7 @@ export async function observeWithSettle(page, prev, opts = {}) {
       matchStreak = 0;
       continue;
     }
+    rememberVisibleText(cur);
     if (!last.ok) {
       last = cur;
       departed ||= changedFromBaseline(cur);
@@ -219,6 +228,8 @@ export async function observeWithSettle(page, prev, opts = {}) {
   const diff = diffSnapshots(previousSnapshot, snapshot, previousUrl, url);
   return {
     snapshot,
+    visibleText: last.visibleText ?? '',
+    visibleTextAdded: [...visibleTextSeen].slice(0, 20),
     url,
     settled,
     settleReason,
@@ -263,6 +274,7 @@ export function compactObservation(obs) {
     summaryTier: obs.summaryTier,
     addedText: obs.addedText.slice(0, HISTORY_TEXT_CAP),
     removedText: obs.removedText.slice(0, HISTORY_TEXT_CAP),
+    visibleTextAdded: obs.visibleTextAdded.slice(0, HISTORY_TEXT_CAP),
     addedRefs: obs.addedRefs.slice(0, HISTORY_REF_CAP),
     removedRefs: obs.removedRefs.slice(0, HISTORY_REF_CAP),
     changedSectionsCount: obs.changedSections.length,
@@ -333,6 +345,9 @@ export function formatPreviousActionResult(entry, observation, snapshot, nextUrl
       ? `${observation.settleReason ?? 'settled'} in ${observation.settleMs}ms`
       : `did NOT settle within ${observation.settleMs}ms — page still mutating`;
     lines.push(`Previous action: ${desc} (${ms}ms; ${settleNote}).`);
+    if (entry.nativeState?.after) {
+      lines.push(`Action succeeded; resulting control state: ${JSON.stringify(entry.nativeState.after)}.`);
+    }
   }
 
   appendChangeLines(lines, observation, snapshot, nextUrl);

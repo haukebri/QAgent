@@ -24,6 +24,7 @@
     "src/config.js",
     "src/evidence.js",
     "src/executor.js",
+    "src/goal-contract.js",
     "src/json.js",
     "src/llm-auth.js",
     "src/observe-settle.js",
@@ -40,7 +41,8 @@
   "scripts": {
     "test": "node --test",
     "benchmark:local": "node scripts/behavioral-benchmark.js",
-    "benchmark:model": "node scripts/behavioral-benchmark.js --live"
+    "benchmark:model": "node scripts/behavioral-benchmark.js --live",
+    "benchmark:verifier": "node scripts/verifier-replay.js"
   },
   "keywords": [],
   "dependencies": {

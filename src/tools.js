@@ -19,6 +19,15 @@ export async function observe(page) {
   return await page.locator('body').ariaSnapshot({ mode: 'ai' });
 }
 
+export async function visibleText(page, maxChars = 4000) {
+  try {
+    const text = await page.locator('body').evaluate(el => el.innerText);
+    return String(text ?? '').split(/\r?\n/).map(line => line.replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n').slice(0, maxChars);
+  } catch {
+    return '';
+  }
+}
+
 export async function inspectTarget(page, ref, snapshot) {
   if (!ref) return { target: 'element', locator: { playwright: null, css: null, frameUrl: null } };
   const locator = page.locator(`aria-ref=${ref}`);
@@ -73,6 +82,29 @@ export async function inspectTarget(page, ref, snapshot) {
         labels,
         testId: attr('data-testid') || null,
         context,
+        question: (() => {
+          for (let node = el.parentElement; node && node !== document.body; node = node.parentElement) {
+            const label = node.querySelector(':scope > legend, :scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6, :scope > [role="heading"], :scope > .question');
+            const text = clean(label?.innerText || label?.textContent);
+            if (text && text !== fallbackName) return text;
+          }
+          return null;
+        })(),
+        nativeState: (() => {
+          if (!el.matches('input, textarea, select, option')) return null;
+          const selected = el.matches('select')
+            ? [...el.selectedOptions].map(option => option.value)
+            : el.matches('option') ? el.selected : null;
+          return {
+            type: el.getAttribute('type') || ('type' in el ? el.type : el.localName),
+            name: el.getAttribute('name'),
+            value: 'value' in el ? el.value : null,
+            checked: 'checked' in el ? el.checked : null,
+            selected,
+            disabled: Boolean(el.disabled),
+            inputValue: el.matches('input, textarea, select') ? el.value : null,
+          };
+        })(),
         css: candidates.find(candidate => {
           try { return document.querySelectorAll(candidate).length === 1; } catch { return false; }
         }) || null,
@@ -87,6 +119,8 @@ export async function inspectTarget(page, ref, snapshot) {
       : role !== 'generic' ? role : dom.type ? `${dom.tag}[type=${JSON.stringify(dom.type)}]` : dom.tag;
     const target = dom.context
       ? `${base} in ${dom.context.role} ${JSON.stringify(dom.context.name)}`
+      : dom.question
+        ? `${base} in section ${JSON.stringify(dom.question)}`
       : base;
 
     let scope = page;
@@ -125,6 +159,7 @@ export async function inspectTarget(page, ref, snapshot) {
     return {
       target,
       locator: { playwright, css: dom.css, frameUrl: dom.frameUrl },
+      ...(dom.nativeState ? { nativeState: { before: dom.nativeState, after: null } } : {}),
     };
   } catch {
     const target = semantic?.name
@@ -132,6 +167,31 @@ export async function inspectTarget(page, ref, snapshot) {
       : semantic?.role || 'element';
     return { target, locator: { playwright: null, css: null, frameUrl: null } };
   }
+}
+
+export async function inspectTargetState(page, ref) {
+  if (!ref) return null;
+  try {
+    return await page.locator(`aria-ref=${ref}`).evaluate(nativeState);
+  } catch {
+    return null;
+  }
+}
+
+function nativeState(el) {
+  if (!el?.matches?.('input, textarea, select, option')) return null;
+  const selected = el.matches('select')
+    ? [...el.selectedOptions].map(option => option.value)
+    : el.matches('option') ? el.selected : null;
+  return {
+    type: el.getAttribute('type') || ('type' in el ? el.type : el.localName),
+    name: el.getAttribute('name'),
+    value: 'value' in el ? el.value : null,
+    checked: 'checked' in el ? el.checked : null,
+    selected,
+    disabled: Boolean(el.disabled),
+    inputValue: el.matches('input, textarea, select') ? el.value : null,
+  };
 }
 
 function semanticTarget(snapshot, ref) {

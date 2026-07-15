@@ -164,7 +164,7 @@ These are observed minimums on real-world targets — pages with grouped fields,
 | OpenAI | `gpt-4.1-nano` | ❌ not viable | $0.02–$0.06 (wasted, runs loop until `--max-turns`) | Misses required checkboxes and confuses grouped fields (e.g. `First` vs `Last` name) regardless of prompt. ~0% success on multi-field forms. As verifier it also false-negatives on pages where a success message and a stale validation banner co-exist. |
 
 Cost notes:
-- Costs above are observed on a Gravity Forms multi-required-field test page; expect variation by snapshot size and turn count. Each turn re-sends a compressed accessibility snapshot to the driver, so denser pages cost more per turn.
+- Costs above are observed on a Gravity Forms multi-required-field test page; expect variation by snapshot size and turn count. Each turn sends one complete current accessibility snapshot to the driver and scrubs older snapshots, so denser pages cost more per turn.
 - The verifier runs at the end (or on `done`/`fail`): one call to decompose the goal into claims, then one check per claim. The calls share the run transcript as a common prefix, so provider prompt caching keeps the added cost small; goals with more steps mean more (cheap) check calls.
 - `--max-turns` (default 50) is the hard cap on driver spend; reduce it to bound worst-case cost on flaky models or pages.
 
@@ -176,7 +176,7 @@ Rule of thumb: if the page has more than ~3 required fields, more than one input
 
 Whether you or your coding agent writes the goal, the rules are the same. A good goal tells the driver **what to do** and tells the verifier **how to know it worked**.
 
-The verifier breaks your goal into individual claims and checks each against the whole run — the actions taken, how the page changed after each one, and the final state. Each claim comes back `yes`, `no`, or `unknown`: a `no` fails the run, an `unknown` (nothing in the run confirms or contradicts it) passes with a warning. So the craft is: **write every step as something the browser can visibly confirm.**
+The verifier breaks your goal into individual claims and checks each against the whole run — the actions taken, how the page changed after each one, and the final state. Each claim comes back `yes`, `no`, or `unknown`. A pass requires `yes` for every claim; `no` and unverified `unknown` claims fail with concrete evidence. So the craft is: **write every step as something the browser can visibly confirm.**
 
 ### The most important hint: a literal success signal
 
@@ -343,7 +343,7 @@ One CLI call. The verdict comes back as a short structured envelope the next age
   "finalUrl": "https://...",       // string
   "finalScreenshot": "final.jpg",  // string, optional — relative to --evidence-dir
   "checks": [                      // array — one entry per verified claim; empty when verifierMode is "single"
-    { "claim": "...", "verdict": "yes", "evidence": "..." }  // verdict: yes | no | unknown ("unknown" passes with a warning)
+    { "claim": "...", "verdict": "yes", "evidence": "..." }  // verdict: yes | no | unknown ("unknown" fails as unverified)
   ],
   "warnings": []                   // string[], includes "unverified claim: ..." entries and verifier-fallback notices; often empty
 }
@@ -380,6 +380,18 @@ Stderr stays clean — only the trace reporter writes its path confirmation ther
 - **Browsers don't auto-install.** Run `npx playwright install chromium` once per runner image. On minimal Linux images, run `npx playwright install-deps chromium` first.
 
 ---
+
+## Release Benchmarks
+
+The deterministic local benchmark runs a delayed wizard, a grouped form with repeated labels, and permitted/forbidden navigation recovery through the real browser, executor, and verifier loops:
+
+```bash
+npm run benchmark:local -- 5
+```
+
+Use `npm run benchmark:model -- 5` to run the same fixtures with the configured provider and recommended model; this requires normal QAgent credentials. External-site smoke runs remain available through `./run-tests.sh 5`, and network failures there do not fail the local benchmark.
+
+The v0.9.0 deterministic baseline (one repetition, July 15, 2026) is 3/3 completed goals, 3/3 correct verdicts, 0 false passes, 0 technical terminations, median 4 turns, median 1.548 seconds, and $0 model cost. The recommended-model run also completed 3/3 goals with 3/3 correct verdicts, 0 false passes, and 0 technical terminations. The prior calculator dataset baseline remains 2 genuine completions, 3 false passes, and 15 reported failures; its external target and 20-goal dataset were not available in this worktree for a comparable rerun.
 
 ## CLI Reference
 

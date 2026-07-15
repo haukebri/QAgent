@@ -1,5 +1,6 @@
 import { Agent } from '@earendil-works/pi-agent-core';
 import { streamWithRequestAuth } from './llm-auth.js';
+import { extractJsonObject } from './json.js';
 
 const SINGLE_JUDGE_PROMPT =
   'You are a QA verifier. Given a goal, the action trajectory an AI driver took, and the final page state, decide whether the goal was actually achieved.\n\n' +
@@ -144,13 +145,18 @@ export function aggregateChecks(checks) {
   }
 
   const unknowns = checks.filter(c => c.verdict === 'unknown');
-  const verified = checks.length - unknowns.length;
+  if (unknowns.length) {
+    const unverified = unknowns[0];
+    return {
+      outcome: 'fail',
+      evidence: `unverified claim: ${unverified.claim}; ${unverified.evidence}`,
+      warnings: unknowns.map(c => `unverified claim: ${c.claim}`),
+    };
+  }
   return {
     outcome: 'pass',
-    evidence: unknowns.length
-      ? `verified ${verified} of ${checks.length} claims; ${unknowns.length} unverified`
-      : `verified all ${checks.length} claims`,
-    warnings: unknowns.map(c => `unverified claim: ${c.claim}`),
+    evidence: `verified all ${checks.length} claims`,
+    warnings: [],
   };
 }
 
@@ -321,12 +327,12 @@ async function callJson({ systemPrompt, prompt, model, resolveRequestAuth, label
   }
   const content = Array.isArray(last?.content) ? last.content : [];
   const text = content.filter(c => c.type === 'text').map(c => c.text).join('');
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw errorWithTokens(`no JSON in ${label}: ${text.slice(0, 200)}`, tokens);
+  const json = extractJsonObject(text);
+  if (!json) throw errorWithTokens(`no JSON in ${label}: ${text.slice(0, 200)}`, tokens);
   try {
-    return { parsed: JSON.parse(match[0]), tokens };
+    return { parsed: JSON.parse(json), tokens };
   } catch (err) {
-    throw errorWithTokens(`${err.message}; raw: ${match[0].slice(0, 200)}`, tokens);
+    throw errorWithTokens(`${err.message}; raw: ${json.slice(0, 200)}`, tokens);
   }
 }
 

@@ -18,14 +18,14 @@ test('fails on the first denied claim', () => {
   assert.deepEqual(checks.map(c => c.claim), ['claim one', 'claim two', 'claim three']);
 });
 
-test('passes with unknown claims as warnings', () => {
+test('fails when a required claim is unverified', () => {
   const result = aggregateChecks([
     { claim: 'claim one', verdict: 'yes', evidence: 'seen in turn 1' },
     { claim: 'claim two', verdict: 'unknown', evidence: 'not recorded' },
   ]);
 
-  assert.equal(result.outcome, 'pass');
-  assert.equal(result.evidence, 'verified 1 of 2 claims; 1 unverified');
+  assert.equal(result.outcome, 'fail');
+  assert.equal(result.evidence, 'unverified claim: claim two; not recorded');
   assert.deepEqual(result.warnings, ['unverified claim: claim two']);
 });
 
@@ -80,6 +80,65 @@ test('records checks mode when claim-based verification completes', async () => 
     assert.match(checkContext, /button \\"Done\\"/);
     assert.match(checkContext, /getByRole/);
     assert.doesNotMatch(checkContext, /\be23\b/);
+  } finally {
+    faux.unregister();
+  }
+});
+
+test('driver failure remains non-authoritative when every claim is proven', async () => {
+  const faux = registerFauxProvider();
+  faux.setResponses([
+    fauxAssistantMessage('{"claims":["Done is visible"]} commentary {"ignored":true}'),
+    fauxAssistantMessage('```json\n{"verdict":"yes","evidence":"The final snapshot shows Done."}\n``` trailing text'),
+    fauxAssistantMessage('{"humanEvidence":"Done is visibly complete."}'),
+  ]);
+  try {
+    const result = await verify(
+      'Done is visible',
+      { action: 'fail', reason: 'driver was unsure' },
+      [],
+      'https://example.test',
+      '- heading "Done"',
+      faux.getModel(),
+      async () => ({}),
+    );
+    assert.equal(result.outcome, 'pass');
+    assert.equal(result.verifierMode, 'checks');
+  } finally {
+    faux.unregister();
+  }
+});
+
+test('named group evidence is not treated as proof for a sibling group', async () => {
+  const faux = registerFauxProvider();
+  let transcript = '';
+  faux.setResponses([
+    fauxAssistantMessage('{"claims":["Same was selected in Travel pattern"]}'),
+    context => {
+      transcript = JSON.stringify(context);
+      return fauxAssistantMessage('{"verdict":"unknown","evidence":"The action was in Work pattern, not Travel pattern."}');
+    },
+    fauxAssistantMessage('{"humanEvidence":"The Travel pattern selection was not verified."}'),
+  ]);
+  try {
+    const history = [{
+      action: { action: 'click', ref: 'e2' },
+      target: 'radio "Same" in fieldset "Work pattern"',
+      url: 'https://example.test',
+    }];
+    const result = await verify(
+      'Same was selected in Travel pattern',
+      { action: 'done' },
+      history,
+      'https://example.test',
+      '- radiogroup "Travel pattern"',
+      faux.getModel(),
+      async () => ({}),
+    );
+    assert.equal(result.outcome, 'fail');
+    assert.equal(result.checks[0].verdict, 'unknown');
+    assert.match(transcript, /Work pattern/);
+    assert.match(transcript, /Travel pattern/);
   } finally {
     faux.unregister();
   }

@@ -55,6 +55,26 @@ test('describes targets with semantic and stable locators', async () => {
   }
 });
 
+test('distinguishes repeated labels by their nearest accessible group', async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent(`
+      <fieldset><legend>Work pattern</legend><label><input type="radio" name="work"> Same</label></fieldset>
+      <div role="radiogroup" aria-label="Travel pattern"><label><input type="radio" name="travel"> Same</label></div>
+      <section><h2>Decorative heading</h2><button>Loose</button></section>
+    `);
+    const snapshot = await page.locator('body').ariaSnapshot({ mode: 'ai' });
+    const refs = [...snapshot.matchAll(/radio "Same" \[ref=(e\d+)\]/g)].map(match => match[1]);
+    assert.match((await inspectTarget(page, refs[0], snapshot)).target, /in fieldset "Work pattern"$/);
+    assert.match((await inspectTarget(page, refs[1], snapshot)).target, /in radiogroup "Travel pattern"$/);
+    const looseRef = snapshot.match(/button "Loose" \[ref=(e\d+)\]/)?.[1];
+    assert.equal((await inspectTarget(page, looseRef, snapshot)).target, 'button "Loose"');
+  } finally {
+    await browser.close();
+  }
+});
+
 test('goBack waits for page load', async () => {
   const calls = [];
   const page = {

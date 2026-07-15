@@ -73,3 +73,47 @@ test('transient observation failure during navigation keeps polling', async () =
   assert.equal(result.url, 'https://example.test/product');
   assert.deepEqual(result.addedText, ['New product page']);
 });
+
+test('waits through a delayed departure and returns the stable new state', async () => {
+  const oldState = '- main [ref=e1]:\n  - heading "Step one" [ref=e2]\n';
+  const newState = '- main [ref=e1]:\n  - heading "Step two" [ref=e2]\n';
+  const snapshots = [oldState, oldState, oldState, newState, newState];
+  let calls = 0;
+  const page = {
+    url: () => 'https://example.test/wizard',
+    locator: () => ({ ariaSnapshot: async () => snapshots[Math.min(calls++, snapshots.length - 1)] }),
+  };
+
+  const result = await observeWithSettle(page, {
+    previousSnapshot: oldState,
+    previousUrl: 'https://example.test/wizard',
+  }, { pollMs: 1, changeGraceMs: 20, maxSettleMs: 100 });
+
+  assert.equal(result.snapshot, newState);
+  assert.equal(result.settleReason, 'changed');
+});
+
+test('returns bounded no-change and timeout reasons', async () => {
+  const unchanged = '- checkbox "Choice" [ref=e1]';
+  const staticPage = {
+    url: () => 'https://example.test',
+    locator: () => ({ ariaSnapshot: async () => unchanged }),
+  };
+  const noChange = await observeWithSettle(staticPage, {
+    previousSnapshot: unchanged,
+    previousUrl: 'https://example.test',
+  }, { pollMs: 1, changeGraceMs: 3, maxSettleMs: 20 });
+  assert.equal(noChange.settleReason, 'no-change');
+
+  let value = 0;
+  const movingPage = {
+    url: () => 'https://example.test',
+    locator: () => ({ ariaSnapshot: async () => `- status "${value++}" [ref=e1]` }),
+  };
+  const timeout = await observeWithSettle(movingPage, {
+    previousSnapshot: '- status "start" [ref=e1]',
+    previousUrl: 'https://example.test',
+  }, { pollMs: 1, changeGraceMs: 3, maxSettleMs: 10 });
+  assert.equal(timeout.settleReason, 'timeout');
+  assert.equal(timeout.settled, false);
+});

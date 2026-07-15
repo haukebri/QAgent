@@ -3,8 +3,8 @@ import { Agent } from '@earendil-works/pi-agent-core';
 import { streamWithRequestAuth } from './llm-auth.js';
 import { observe, inspectTarget, click, fill, selectOption, pressKey, type, goBack } from './tools.js';
 import { verify } from './verifier.js';
-import { compressAgainstBaseline } from './snapshot-compress.js';
-import { observeWithSettle, observeForVerdict, diffSnapshots, compactObservation, formatPreviousActionResult } from './observe-settle.js';
+import { extractJsonObject } from './json.js';
+import { observeWithSettle, observeForVerdict, compactObservation, formatPreviousActionResult } from './observe-settle.js';
 
 const SNAPSHOT_BEGIN = '<<SNAPSHOT_BEGIN>>';
 const SNAPSHOT_END = '<<SNAPSHOT_END>>';
@@ -13,6 +13,7 @@ const REF_ACTIONS = new Set(['click', 'fill', 'selectOption', 'type', 'pressKey'
 
 const STUCK_WINDOW = 5;
 const STUCK_THRESHOLD = 3;
+const MAX_DRIVER_WAIT_MS = 10_000;
 
 const SYSTEM_PROMPT =
   'You plan one browser action at a time toward a goal. Respond with a single JSON object and nothing else (no markdown fences, no commentary).\n\n' +
@@ -36,7 +37,7 @@ const SYSTEM_PROMPT =
   'Wait first, then re-check.\n\n' +
   'Pick "done" when the goal is clearly complete — include a "summary" that answers any question the goal asked for. ' +
   'Before choosing done, re-read the most recent observation. If it contains error, validation, or failure messages related to your goal, the task is NOT done — resolve them (fix fields, resubmit, dismiss and retry) instead. Your done summary must not contradict the observation. ' +
-  'If the current page does not match the goal, first try to recover: use "goBack" after a wrong click, or re-read the snapshot for the element you actually need. ' +
+  'If the current page does not match the goal, re-read the snapshot and recover only with actions allowed by the goal. Explicit goal constraints govern recovery. ' +
   'Pick "fail" only when the goal is impossible and you have attempted recovery, or when no recovery action exists; include what you tried in the "reason". ' +
   "Don't fabricate: if you cannot literally verify what the goal asks for, use \"fail\".\n\n" +
   'Element heuristics: prefer refs labelled `link` (which show a `- /url: …` line) or ' +
@@ -46,7 +47,7 @@ const SYSTEM_PROMPT =
   'in `Added:` and no URL change, those are the new menu items; look for them in the ' +
   'snapshot below instead of re-clicking the same ref.\n\n' +
   'Form submits or other actions might take extra time to complete. Use the `wait` tool to wait for the action to complete before re-checking.\n\n' +
-  'goBack — return to the previous page, e.g. after clicking a wrong link.\n\n' +
+  'goBack — return after a genuine in-run navigation, only when the goal permits browser-back recovery.\n\n' +
   'Form-tool heuristics: ' +
   'Use `selectOption` for `combobox` refs whose YAML lists `option` children — these are native `<select>` dropdowns. ' +
   'Pass the visible option label as `value` (e.g. "Frau"); for `<select multiple>` pass an array of labels. ' +
@@ -55,23 +56,8 @@ const SYSTEM_PROMPT =
   'Omit `ref` for a global key press (e.g. Escape to close whatever modal is open). Modifier combos like Control+A are NOT supported.\n' +
   'Use `type` only when `fill` silently failed (the input still appears empty in the next snapshot after a fill turn). It types character-by-character via real keyboard events for inputs that ignore programmatic value injection. ' +
   'It does NOT clear the existing value, so do not use it to replace text that is already there.\n\n' +
-  `Snapshots in earlier user messages are replaced with "${SCRUBBED_SNAPSHOT}" — only the latest snapshot is current. ` +
-  'Always pick refs from the latest snapshot.\n\n' +
-  'A user message beginning "Baseline anchor (turn N)." is a pinned reference snapshot kept in full. ' +
-  'In the latest snapshot, a section body may read "# unchanged since turn N" — that section is byte-identical to the baseline anchor\'s, ' +
-  'so its refs are the SAME numbers as in the anchor. Look up element details there.';
-
-const DONE_CHECK_PROMPT =
-  'You are a QA verifier. Decide whether a browser driver\'s done summary is contradicted by the final observation.\n\n' +
-  'Respond with a single JSON object and nothing else (no markdown fences, no commentary):\n' +
-  '  { "contradicted": true | false, "reason": "<one sentence citing concrete observation text when contradicted>" }\n\n' +
-  'Rules:\n' +
-  '- Base the decision only on the supplied goal, driver summary, final URL, and observation JSON.\n' +
-  '- The observation JSON may include `mostRecentBeforeDone` and `terminalAfterDone`; inspect the addedText/removedText fields in both.\n' +
-  "- Ask explicitly: does the final observation contradict the driver's success summary (e.g. visible error or validation messages)?\n" +
-  '- If the observation shows the goal still failed, still needs correction, or still displays a validation/submission failure related to the goal, return contradicted=true.\n' +
-  '- If contradicted=true, the reason must quote or name the concrete observation text.\n' +
-  '- If the observation is merely incomplete or ambiguous, return contradicted=false.';
+  `Snapshots in earlier user messages are replaced with "${SCRUBBED_SNAPSHOT}" — only the latest snapshot is current and complete. ` +
+  'Always pick refs from the latest snapshot.';
 
 export async function runTodo(
   page,
@@ -88,11 +74,10 @@ export async function runTodo(
   const t0 = Date.now();
   const emitTurn = entry => onTurn?.(toPublicStep(entry));
 
-  const scrubState = { baselineTurn: 0 };
   const agent = new Agent({
     initialState: { systemPrompt: SYSTEM_PROMPT, model },
     sessionId: randomUUID(),
-    transformContext: async (messages) => scrubOldSnapshots(messages, scrubState.baselineTurn),
+    transformContext: async (messages) => scrubOldSnapshots(messages),
     streamFn: streamWithRequestAuth(resolveRequestAuth),
   });
 
@@ -108,11 +93,10 @@ export async function runTodo(
   const recentRefActions = [];
   const warnedSignatures = new Set();
   let pendingRefAction = null;
+  const initialHistoryIndex = await browserHistoryIndex(page);
+  let reversibleNavigations = 0;
 
   let prev = null;             // { snapshot, url, actionEntry } after a performed action; null on turn 1
-  let baseline = null;
-  let prevCompressionRatio = null;
-
   while (turns < maxTurns) {
     if (Date.now() - t0 > testTimeoutMs) {
       wallClockExpired = true;
@@ -122,23 +106,13 @@ export async function runTodo(
     try {
       let snapshot, url, observation;
       if (prev && prev.actionEntry.observation == null) {
-        if (prev.actionEntry.action.action === 'wait') {
-          snapshot = await observe(page);
-          url = page.url();
-          observation = {
-            settled: true,
-            settleMs: 0,
-            ...diffSnapshots(prev.snapshot, snapshot, prev.url, url),
-          };
-        } else {
-          const settle = await observeWithSettle(page, {
-            previousSnapshot: prev.snapshot,
-            previousUrl: prev.url,
-          });
-          snapshot = settle.snapshot;
-          url = settle.url;
-          observation = settle;
-        }
+        const settle = await observeWithSettle(page, {
+          previousSnapshot: prev.snapshot,
+          previousUrl: prev.url,
+        });
+        snapshot = settle.snapshot;
+        url = settle.url;
+        observation = settle;
         prev.actionEntry.observation = compactObservation(observation);
       } else {
         // Turn 1, or a retry turn after parse-error / ref-miss / done-rejected
@@ -148,26 +122,9 @@ export async function runTodo(
         observation = null;
       }
       finalSnapshot = snapshot;
-
-      const shouldReset = !baseline
-        || url !== baseline.url
-        || (prevCompressionRatio != null && prevCompressionRatio > 0.6)
-        || turns - baseline.turn >= 6
-        || (lastError && observation && observation.deltaChars > 500);
-
-      let messageSnapshot;
-      let isBaselineTurn;
-      if (shouldReset) {
-        baseline = { turn: turns, url, yaml: snapshot };
-        scrubState.baselineTurn = turns;
-        messageSnapshot = snapshot;
-        isBaselineTurn = true;
-        prevCompressionRatio = null;
-      } else {
-        const { text, stats } = compressAgainstBaseline(snapshot, baseline.yaml, baseline.turn);
-        messageSnapshot = text;
-        isBaselineTurn = false;
-        prevCompressionRatio = stats.origBytes > 0 ? stats.compressedBytes / stats.origBytes : 1;
+      const currentHistoryIndex = await browserHistoryIndex(page);
+      if (initialHistoryIndex != null && currentHistoryIndex != null) {
+        reversibleNavigations = Math.max(0, currentHistoryIndex - initialHistoryIndex);
       }
 
       if (pendingRefAction && observation) {
@@ -198,7 +155,7 @@ export async function runTodo(
       const previousActionResult = observation && history.length > 0
         ? formatPreviousActionResult(history[history.length - 1], observation, snapshot, url)
         : null;
-      const { action, usage, parseError, llmError } = await askNextAction({ agent, goal, url, messageSnapshot, isBaselineTurn, baselineTurn: baseline.turn, lastError, previousActionResult, recentActions });
+      const { action, usage, parseError, llmError } = await askNextAction({ agent, goal, url, snapshot, lastError, previousActionResult, recentActions });
       if (usage) {
         tokens.input += usage.input ?? 0;
         tokens.output += usage.output ?? 0;
@@ -227,13 +184,8 @@ export async function runTodo(
       }
 
       if (action.action === 'done') {
-        // Terminal assertion-style settle. Baseline is the snapshot the LLM
-        // saw at the top of THIS turn — `done` is a verdict on that state, so
-        // we wait for the page to depart from it before judging. When prev is
-        // null (turn-1 done, or done after a parse-error/ref-miss with no
-        // performed action this run), pass a null baseline so observeForVerdict
-        // skips the requireChange gate and just confirms inter-sample stability
-        // quickly — there's no prior action to wait on.
+        // Freeze one final settled sample without rewriting the preceding
+        // action's already-recorded observation.
         let terminalObs = null;
         try {
           const settle = await observeForVerdict(page, prev
@@ -241,50 +193,9 @@ export async function runTodo(
             : { previousSnapshot: null, previousUrl: null });
           terminalObs = settle;
           finalSnapshot = settle.snapshot;
-          // Refresh the prior action's history-entry observation with the
-          // post-settle view — that's what the (now observation-aware) guard
-          // inspects on the very next line.
-          if (prev) prev.actionEntry.observation = compactObservation(settle);
         } catch {
           // Best-effort. If settle throws, fall back to the pre-settle snapshot
-          // already captured at the top of this turn; the guard runs below
-          // either way.
-        }
-
-        let doneProblem = findBlockingPriorError({ history, warnings, turns });
-        if (!doneProblem) {
-          const doneCheck = await checkDoneContradiction({
-            goal,
-            summary: action.summary ?? '',
-            finalUrl: page.url(),
-            observation: {
-              mostRecentBeforeDone: observation ? compactObservation(observation) : prev?.actionEntry?.observation ?? null,
-              terminalAfterDone: terminalObs ? compactObservation(terminalObs) : null,
-            },
-            model,
-            resolveRequestAuth,
-          });
-          if (doneCheck.usage) addTokenUsage(tokens, doneCheck.usage);
-          doneProblem = doneCheck.problem;
-        }
-        if (doneProblem) {
-          // Terminate the run as fail — no retry, no cap-bypass. The verifier
-          // still runs at the end of runTodo against finalSnapshot.
-          verdict = { action: 'fail', summary: null, reason: doneProblem };
-          const rejEntry = {
-            turn: turns,
-            atMs: Date.now() - t0,
-            action,
-            url: page.url(),
-            error: `done-gate rejected: ${doneProblem}`,
-          };
-          if (terminalObs) {
-            rejEntry.observation = { ...compactObservation(terminalObs), terminal: true };
-          }
-          if (usage) rejEntry.tokens = stepTokens(usage);
-          history.push(rejEntry);
-          await emitTurn(rejEntry);
-          break;
+          // already captured at the top of this turn.
         }
 
         verdict = { action: 'done', summary: action.summary ?? null, reason: null };
@@ -312,7 +223,6 @@ export async function runTodo(
             });
             terminalObs = settle;
             finalSnapshot = settle.snapshot;
-            prev.actionEntry.observation = compactObservation(settle);
           } catch {
             // Best-effort.
           }
@@ -378,6 +288,10 @@ export async function runTodo(
       await addStepScreenshot(entry, evidenceRecorder, page);
       const tAction = Date.now();
       try {
+        if (action.action === 'goBack') {
+          const reason = backRecoveryError(goal, reversibleNavigations);
+          if (reason) throw new Error(reason);
+        }
         let recoveredVia = null;
         if (action.action === 'click') recoveredVia = await click(page, action.ref, actionTimeoutMs);
         else if (action.action === 'fill') recoveredVia = await fill(page, action.ref, action.value, actionTimeoutMs);
@@ -385,7 +299,7 @@ export async function runTodo(
         else if (action.action === 'pressKey') recoveredVia = await pressKey(page, action.ref, action.key, actionTimeoutMs);
         else if (action.action === 'type') recoveredVia = await type(page, action.ref, action.value, actionTimeoutMs);
         else if (action.action === 'goBack') recoveredVia = await goBack(page);
-        else if (action.action === 'wait') await page.waitForTimeout(action.ms ?? 1000);
+        else if (action.action === 'wait') await page.waitForTimeout(driverWaitMs(action.ms));
         else throw new Error(`unknown action: ${action.action}`);
         entry.ms = Date.now() - tAction;
         entry.url = page.url();
@@ -424,23 +338,12 @@ export async function runTodo(
   // that action did.
   if (prev && prev.actionEntry.observation == null) {
     try {
-      if (prev.actionEntry.action.action === 'wait') {
-        const finalSnap = await observe(page);
-        const finalU = page.url();
-        prev.actionEntry.observation = compactObservation({
-          settled: true,
-          settleMs: 0,
-          ...diffSnapshots(prev.snapshot, finalSnap, prev.url, finalU),
-        });
-        finalSnapshot = finalSnap;
-      } else {
-        const settle = await observeWithSettle(page, {
-          previousSnapshot: prev.snapshot,
-          previousUrl: prev.url,
-        });
-        prev.actionEntry.observation = compactObservation(settle);
-        finalSnapshot = settle.snapshot;
-      }
+      const settle = await observeWithSettle(page, {
+        previousSnapshot: prev.snapshot,
+        previousUrl: prev.url,
+      });
+      prev.actionEntry.observation = compactObservation(settle);
+      finalSnapshot = settle.snapshot;
     } catch {
       // Best-effort; do not let a final-observation failure mask a real verdict.
     }
@@ -520,77 +423,30 @@ export async function runTodo(
   };
 }
 
-export async function checkDoneContradiction({ goal, summary, finalUrl, observation, model, resolveRequestAuth }) {
-  const agent = new Agent({
-    initialState: { systemPrompt: DONE_CHECK_PROMPT, model },
-    streamFn: streamWithRequestAuth(resolveRequestAuth),
-  });
-
-  await agent.prompt(
-    `Goal: ${goal}\n\n` +
-    `Driver done summary: ${summary || '(none)'}\n\n` +
-    `Final URL: ${finalUrl}\n\n` +
-    `Final observation JSON:\n${JSON.stringify(observation, null, 2)}\n\n` +
-    'Your JSON:',
-  );
-
-  const last = [...agent.state.messages].reverse().find(m => m.role === 'assistant');
-  const usage = last?.usage ?? null;
-  if (!last) throw new Error('no assistant message returned by done check LLM');
-  const errorMessage = last?.errorMessage ?? agent.state.errorMessage;
-  if (last?.stopReason === 'error' || errorMessage) {
-    throw new Error(errorMessage ?? 'provider returned an error stop reason');
+export function backRecoveryError(goal, reversibleNavigations) {
+  if (/\b(?:do not|don't|never|must not|without)\b.{0,40}\b(?:browser\s+back|go\s*back|back\s+button)\b/iu.test(goal)) {
+    return 'goBack rejected: the goal explicitly forbids browser-back recovery; re-read the current state or fail with evidence';
   }
-  const content = Array.isArray(last?.content) ? last.content : [];
-  const text = content.filter(c => c.type === 'text').map(c => c.text).join('');
-  const jsonStr = extractActionJson(text);
-  if (!jsonStr) throw new Error(`no JSON in done check response: ${text.slice(0, 200)}`);
-
-  let parsed;
-  try {
-    parsed = JSON.parse(jsonStr);
-  } catch (err) {
-    throw new Error(`${err.message}; raw: ${jsonStr.slice(0, 200)}`);
-  }
-  if (typeof parsed.contradicted !== 'boolean') {
-    throw new Error(`invalid done check contradicted value: ${parsed.contradicted}`);
-  }
-  if (!parsed.contradicted) return { problem: null, usage };
-
-  const reason = typeof parsed.reason === 'string' && parsed.reason.trim()
-    ? parsed.reason.trim()
-    : 'the final observation contradicts the driver success summary';
-  return { problem: `Your done summary contradicts the final observation: ${reason}`, usage };
-}
-
-export function findBlockingPriorError({ history, warnings, turns }) {
-  for (let i = history.length - 1; i >= 0; i--) {
-    const entry = history[i];
-    if (entry.action?.action === 'done') continue;
-    // Pre-execution rejections (parse-error, ref-miss) carry an `error` but no
-    // `ms` — they describe LLM/validation issues, not page state. Skip them
-    // and look further back for the most recent performed action.
-    if (entry.ms == null) continue;
-    if (entry.error) {
-      const obs = entry.observation;
-      const meaningfulChange =
-        obs && (obs.urlChanged || obs.snapshotChanged || (obs.addedText && obs.addedText.length > 0));
-      if (meaningfulChange) return null;
-      warnings.push(`done-gate: rejected by history guard at turn ${turns} — previous action errored: ${entry.error}`);
-      return `Your previous action did not succeed: ${entry.error}. Resolve the failure or fail with a reason.`;
-    }
-    break;
+  if (reversibleNavigations < 1) {
+    return 'goBack rejected: no reversible in-run navigation was observed; re-read the current state or fail with evidence';
   }
   return null;
 }
 
-function addTokenUsage(tokens, usage) {
-  tokens.input += usage.input ?? 0;
-  tokens.output += usage.output ?? 0;
-  tokens.cacheRead += usage.cacheRead ?? 0;
-  tokens.cacheWrite += usage.cacheWrite ?? 0;
-  tokens.totalTokens += usage.totalTokens ?? 0;
-  tokens.cost += usage.cost?.total ?? 0;
+async function browserHistoryIndex(page) {
+  try {
+    return await page.evaluate(() => globalThis.navigation?.currentEntry?.index ?? null);
+  } catch {
+    return null;
+  }
+}
+
+export function driverWaitMs(value) {
+  const ms = value ?? 1000;
+  if (!Number.isFinite(ms) || ms < 0 || ms > MAX_DRIVER_WAIT_MS) {
+    throw new Error(`wait rejected: ms must be between 0 and ${MAX_DRIVER_WAIT_MS}`);
+  }
+  return ms;
 }
 
 function stepTokens(usage) {
@@ -644,11 +500,11 @@ function oneLine(value) {
   return String(value ?? 'unknown error').split('\n')[0];
 }
 
-async function askNextAction({ agent, goal, url, messageSnapshot, isBaselineTurn, baselineTurn, lastError, previousActionResult, recentActions }) {
+async function askNextAction({ agent, goal, url, snapshot, lastError, previousActionResult, recentActions }) {
   const isFirstTurn = agent.state.messages.length === 0;
   const message = isFirstTurn
-    ? buildInitialPrompt({ goal, url, snapshot: messageSnapshot, baselineTurn })
-    : buildFollowUpPrompt({ url, snapshot: messageSnapshot, lastError, previousActionResult, isBaselineTurn, baselineTurn, recentActions });
+    ? buildInitialPrompt({ goal, url, snapshot })
+    : buildFollowUpPrompt({ url, snapshot, lastError, previousActionResult, recentActions });
   await agent.prompt(message);
   const last = [...agent.state.messages].reverse().find(m => m.role === 'assistant');
   const usage = last?.usage ?? null;
@@ -661,7 +517,7 @@ async function askNextAction({ agent, goal, url, messageSnapshot, isBaselineTurn
   }
   const content = Array.isArray(last?.content) ? last.content : [];
   const text = content.filter(c => c.type === 'text').map(c => c.text).join('');
-  const jsonStr = extractActionJson(text);
+  const jsonStr = extractJsonObject(text);
   if (!jsonStr) {
     return { action: null, usage, parseError: `no JSON object in LLM response (got: ${text.slice(0, 200)})` };
   }
@@ -721,33 +577,8 @@ function normalizeActionShape(parsed) {
   return { error: `unsupported shorthand "${verb}"` };
 }
 
-// Extract the first balanced JSON object from an LLM response. Strips markdown
-// fences (```json ... ```), then walks brace depth while respecting strings
-// and escapes — so a `}` inside a string value won't end the match early, and
-// a second JSON object after the first is ignored.
-function extractActionJson(text) {
-  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-  const src = fenceMatch ? fenceMatch[1] : text;
-  const start = src.indexOf('{');
-  if (start < 0) return null;
-  let depth = 0;
-  let inString = false;
-  let escape = false;
-  for (let i = start; i < src.length; i++) {
-    const c = src[i];
-    if (escape) { escape = false; continue; }
-    if (c === '\\') { escape = true; continue; }
-    if (c === '"') { inString = !inString; continue; }
-    if (inString) continue;
-    if (c === '{') depth++;
-    else if (c === '}' && --depth === 0) return src.slice(start, i + 1);
-  }
-  return null;
-}
-
-function buildInitialPrompt({ goal, url, snapshot, baselineTurn }) {
+function buildInitialPrompt({ goal, url, snapshot }) {
   return (
-    `Baseline anchor (turn ${baselineTurn}).\n\n` +
     `Goal: ${goal}\n\n` +
     `Current URL: ${url}\n\n` +
     `${SNAPSHOT_BEGIN}\n${snapshot}\n${SNAPSHOT_END}\n\n` +
@@ -755,9 +586,8 @@ function buildInitialPrompt({ goal, url, snapshot, baselineTurn }) {
   );
 }
 
-function buildFollowUpPrompt({ url, snapshot, lastError, previousActionResult, isBaselineTurn, baselineTurn, recentActions }) {
+function buildFollowUpPrompt({ url, snapshot, lastError, previousActionResult, recentActions }) {
   const lines = [];
-  if (isBaselineTurn) lines.push(`Baseline anchor (turn ${baselineTurn}).`, '');
   if (previousActionResult) {
     lines.push(previousActionResult);
     lines.push('');
@@ -791,14 +621,12 @@ function recentActionsBlock(history, n) {
   return recent.map(formatRecentAction).join('\n');
 }
 
-function scrubOldSnapshots(messages, keepBaselineTurn) {
+export function scrubOldSnapshots(messages) {
   const lastUserIdx = findLastUserIndex(messages);
   if (lastUserIdx < 0) return messages;
   const snapRe = new RegExp(`${SNAPSHOT_BEGIN}[\\s\\S]*?${SNAPSHOT_END}`, 'g');
-  const anchorPrefix = keepBaselineTurn ? `Baseline anchor (turn ${keepBaselineTurn}).` : null;
   return messages.map((m, i) => {
     if (m.role !== 'user' || i === lastUserIdx) return m;
-    if (anchorPrefix && m.content.some(c => c.type === 'text' && c.text.startsWith(anchorPrefix))) return m;
     const newContent = m.content.map(c => {
       if (c.type !== 'text' || !c.text.includes(SNAPSHOT_BEGIN)) return c;
       return { ...c, text: c.text.replace(snapRe, SCRUBBED_SNAPSHOT) };

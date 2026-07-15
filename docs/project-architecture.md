@@ -44,18 +44,20 @@ setup/pre-navigation; it is not exposed as a driver action.
 
 ### executor.js
 
-Driver loop for one goal. It observes and settles the page, compresses snapshots
-against a baseline, asks the driver LLM for one JSON action through
+Driver loop for one goal. It observes and settles the page, sends one complete
+current accessibility snapshot while scrubbing older snapshots, asks the driver LLM for one JSON action through
 `pi-agent-core`, executes the local Playwright action, records history, detects
-repeated no-progress actions, and exits on `done`, `fail`, stuck, timeout, or
-turn cap. When `evidenceDir` is set, it saves viewport JPEGs before executed
+repeated no-progress actions, constrains unsafe browser-back recovery, and exits
+on `done`, `fail`, stuck, timeout, or turn cap. Driver terminal messages are
+evidence only. When `evidenceDir` is set, it saves viewport JPEGs before executed
 browser actions and once at the final page state. The final outcome is still
 decided by `verifier.js`.
 
 ### verifier.js
 
 End-state judge. It decomposes the goal into checkable claims, checks each claim
-against the frozen action history/final state, aggregates the authoritative
+against the frozen action history/final state, and passes only when every claim
+has concrete positive evidence. It aggregates the authoritative
 `outcome` plus compact `evidence`, then makes one final prose-only LLM call for
 `humanEvidence`. Structured `checks` and `evidence` are kept for debug/automation;
 the list reporter shows `humanEvidence`. It retries provider/parse failures and
@@ -79,10 +81,15 @@ User/project config loading, coercion, validation, and `qagent config` commands.
 User config is `~/.config/qagent/config.json`; project config is
 `./qagent.config.json` in the current working directory.
 
-### observe-settle.js / snapshot-compress.js
+### observe-settle.js
 
 Page stability, fingerprinting, previous-action diffs, compact observation
-payloads, and snapshot compression against a baseline anchor.
+payloads, and bounded `changed`, `no-change`, or `timeout` settle results.
+
+### json.js
+
+Shared extraction of the first complete JSON object from driver and verifier
+model responses, including quoted braces and escaped quotes.
 
 ### reporters.js / recorder.js
 
@@ -134,9 +141,10 @@ If a site still blocks after that, escalate in this order:
 
 Network navigation uses `waitUntil: 'load'` with a bounded timeout
 ('networkidle' is discouraged by Playwright — chatty sites with analytics
-or polling rarely settle). SPA route hydration and post-action mutation
-are absorbed by the settle loop in `observe-settle.js`, which polls
-`observe()` until URL + snapshot fingerprint are stable for two consecutive
-samples or 3s elapses. Navigate timeouts are fatal inside the executor
+or polling rarely settle). SPA route hydration and post-action mutation are
+absorbed by the settle loop in `observe-settle.js`, which allows a bounded grace
+period for departure from the pre-action state and then requires URL + snapshot
+stability. Explicit wait actions use the same settle path after their requested
+minimum delay. Navigate timeouts are fatal inside the executor
 loop (outcome `error`, exit code 3); any other exception also becomes
 `error` so every run produces a result file.

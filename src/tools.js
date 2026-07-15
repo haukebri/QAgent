@@ -34,14 +34,14 @@ export async function inspectTarget(page, ref, snapshot) {
 
       let context = null;
       for (let node = el.parentElement; node && node !== document.body; node = node.parentElement) {
-        if (!node.matches('dialog, [role="dialog"], fieldset, form, section, article, [role="region"], [role="group"]')) continue;
+        if (!node.matches('dialog, [role="dialog"], fieldset, form, [role="region"], [role="group"], [role="radiogroup"]')) continue;
         const labelledBy = node.getAttribute('aria-labelledby');
         const labelledText = labelledBy
           ? labelledBy.split(/\s+/).map(id => document.getElementById(id)?.textContent).filter(Boolean).join(' ')
           : '';
         const heading = node.matches('fieldset')
           ? node.querySelector(':scope > legend')
-          : node.querySelector('h1, h2, h3, h4, h5, h6, [role="heading"]');
+          : node.querySelector(':scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6, :scope > [role="heading"]');
         const name = clean(node.getAttribute('aria-label') || labelledText || heading?.textContent)
           .replace(/(\S)\(/g, '$1 (');
         if (name && name !== fallbackName) {

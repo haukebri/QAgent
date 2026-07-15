@@ -1,7 +1,7 @@
 # QAgent consumer changelog
 
 This document covers consumer-facing changes released from **2026-07-06 through
-2026-07-13** in `v0.7.0` and `v0.8.0`, plus the upcoming `v0.8.1` patch.
+2026-07-15** in `v0.7.0` through `v0.9.0`.
 It is written for services that invoke the `qagent` CLI, consume its JSON or
 NDJSON output, or call `runQAgent()` directly.
 
@@ -11,7 +11,8 @@ NDJSON output, or call `runQAgent()` directly.
 |---|---|
 | Screenshot evidence | Released in `v0.7.0` |
 | Claim verification, locale, recovery, and human verdicts | Released in `v0.8.0` |
-| Semantic action targets | Planned for `v0.8.1` |
+| Semantic action targets | Released in `v0.8.1` |
+| Proof-complete verification and behavioral reliability | Released in `v0.9.0` |
 
 `v0.7.0` points to commit `faf1d35`. `v0.8.0` points to commit `b9a73d7` and
 contains the 15 commits made after `v0.7.0`.
@@ -28,8 +29,8 @@ contains the 15 commits made after `v0.7.0`.
 - Do not interpret `verifierMode: "single"` and `checks: []` as "nothing was
   checked". It means claim decomposition failed and QAgent used its older
   single-call verifier.
-- Decide whether unverified claims are acceptable in your service. A claim with
-  `verdict: "unknown"` currently produces a warning but does not fail the run.
+- Treat a claim with `verdict: "unknown"` as visible missing proof; QAgent now
+  returns a failed outcome for it.
 - Do not match browser-action error strings exactly. Overlay errors now include
   page text, available controls, and recovery guidance.
 - Revisit verifier budgets and timeouts. Verification uses one decomposition
@@ -38,6 +39,33 @@ contains the 15 commits made after `v0.7.0`.
 - Write goals as stable, visibly checkable claims. Prefer named UI text, items,
   URLs, and dialog contents over vague states, volatile counts, or mandatory
   retry wording.
+
+## v0.9.0 — 2026-07-15
+
+- Driver turns now receive one complete current accessibility snapshot instead
+  of reconstructing unchanged sections from an older baseline, preventing
+  unchanged form content from being mistaken for a missing page.
+- Verifier passes now require positive evidence for every required claim;
+  unverified claims remain visible as `unknown` checks but make the run fail
+  instead of producing a warning-only pass.
+- Post-action observation now waits for delayed page changes to begin and then
+  stabilize, while explicitly distinguishing changed, unchanged, and timed-out
+  states; explicit wait actions use the same settle path.
+- Browser-back recovery now respects explicit goal constraints and is blocked
+  when QAgent has not observed a reversible in-run navigation, preventing
+  destructive recovery to `about:blank`.
+- Driver and verifier responses now share robust first-object JSON extraction,
+  avoiding unnecessary verifier fallback when a model appends commentary or a
+  second object after valid JSON.
+- Semantic action evidence now includes the nearest accessible field or control
+  group when available, helping traces and verifier checks distinguish identical
+  option labels in different parts of a form.
+- The release benchmark now covers delayed wizards, accessible grouped forms,
+  and constrained navigation recovery, with false-pass, completion, turn, time,
+  and cost reporting kept separate from external-site smoke runs.
+- Final outcomes are now decided by the independent verifier after deterministic
+  terminal settling; the duplicate executor-side LLM contradiction check has
+  been removed.
 
 ## v0.8.1 — 2026-07-13
 

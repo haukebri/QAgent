@@ -1,6 +1,30 @@
 import { createHash } from 'node:crypto';
-import { sliceSections } from './snapshot-compress.js';
 import { observe } from './tools.js';
+
+function sliceSections(yaml) {
+  const lines = yaml.split('\n');
+  const dashes = lines.flatMap((line, idx) => {
+    const match = line.match(/^(\s*)-\s/);
+    return match ? [{ idx, indent: match[1].length }] : [];
+  });
+  if (!dashes.length) return [];
+
+  const counts = new Map();
+  for (const dash of dashes) counts.set(dash.indent, (counts.get(dash.indent) ?? 0) + 1);
+  const sliceIndent = [...counts.keys()].sort((a, b) => a - b).find(indent => counts.get(indent) >= 2)
+    ?? dashes[0].indent;
+  const starts = dashes.filter(dash => dash.indent === sliceIndent).map(dash => dash.idx);
+  return starts.map((start, index) => {
+    const text = lines.slice(start, starts[index + 1] ?? lines.length).join('\n');
+    const header = lines[start];
+    return {
+      role: header.match(/^\s*-\s*([A-Za-z][\w-]*)/)?.[1] ?? 'unknown',
+      ref: header.match(/\[ref=(e\d+)\]/)?.[1] ?? null,
+      text,
+      sha1: createHash('sha1').update(text).digest('hex'),
+    };
+  });
+}
 
 // Stable hash of an ariaSnapshot YAML string. Strips refs (Playwright re-numbers
 // them deterministically; identical DOM produces identical numbers, but
@@ -126,9 +150,9 @@ async function safeObserve(page) {
   }
 }
 
-// Repeatedly observe until URL+normalized snapshot are stable for `stableSamples`
-// consecutive samples, or `maxSettleMs` elapses. Returns the latest sample plus
-// the structured diff against `previousSnapshot` / `previousUrl`.
+// After an action, allow delayed changes to begin, then require the changed
+// state to stabilize. A page that stays unchanged through the grace period is
+// also a complete, bounded observation.
 //
 // Never throws: a Playwright failure inside the loop is treated as an in-flight
 // transition; if observations do not recover by the deadline, returns
@@ -137,39 +161,36 @@ export async function observeWithSettle(page, prev, opts = {}) {
   const pollMs = opts.pollMs ?? 150;
   const stableSamples = opts.stableSamples ?? 2;
   const maxSettleMs = opts.maxSettleMs ?? 3000;
-  // requireChange (terminal-settle opt-in): a sample only counts toward the
-  // stability streak when its visible state has departed from the baseline.
-  // "Departed" means a different URL, or at least one quoted accessible name
-  // added/removed relative to previousSnapshot. Pure structural deltas that
-  // produce no text-set change (button [disabled] toggle, focus shift) still
-  // hold the streak at 0 — the loop keeps polling until the page has actually
-  // moved off the LLM-seen state, or maxSettleMs elapses.
-  const requireChange = opts.requireChange ?? false;
   const previousSnapshot = prev?.previousSnapshot ?? null;
   const previousUrl = prev?.previousUrl ?? null;
   const prevFp = previousSnapshot ? fingerprint(previousSnapshot) : null;
-  const prevTexts = previousSnapshot ? extractQuotedNames(previousSnapshot) : null;
-  const isDeparted = (sample) => {
-    if (!requireChange || prevFp == null) return true;
-    if (sample.url !== previousUrl) return true;
-    if (fingerprint(sample.snapshot) === prevFp) return false;
-    const sampleTexts = extractQuotedNames(sample.snapshot);
-    for (const t of sampleTexts) if (!prevTexts.has(t)) return true;
-    for (const t of prevTexts) if (!sampleTexts.has(t)) return true;
-    return false;
-  };
-  const countsForStability = (sample) => !isBusySnapshot(sample.snapshot) && isDeparted(sample);
+  const changeGraceMs = opts.changeGraceMs ?? Math.min(1000, maxSettleMs);
+  const changedFromBaseline = sample => prevFp != null && (
+    sample.url !== previousUrl || fingerprint(sample.snapshot) !== prevFp
+  );
 
   const t0 = Date.now();
   let initialUrl = '';
   try { initialUrl = page.url(); } catch {}
   let last = await safeObserve(page);
   let settled = false;
-  let matchStreak = last.ok && countsForStability(last) ? 1 : 0;
+  let departed = last.ok && changedFromBaseline(last);
+  let matchStreak = last.ok && !isBusySnapshot(last.snapshot) && (prevFp == null || departed) ? 1 : 0;
+  let settleReason = 'timeout';
 
   while (true) {
-    if (matchStreak >= stableSamples) { settled = true; break; }
-    const remainingMs = maxSettleMs - (Date.now() - t0);
+    const elapsed = Date.now() - t0;
+    if (matchStreak >= stableSamples) {
+      settled = true;
+      settleReason = departed ? 'changed' : 'no-change';
+      break;
+    }
+    if (prevFp != null && !departed && elapsed >= changeGraceMs && last.ok && !isBusySnapshot(last.snapshot)) {
+      settled = true;
+      settleReason = 'no-change';
+      break;
+    }
+    const remainingMs = maxSettleMs - elapsed;
     if (remainingMs <= 0) break;
     await sleep(Math.min(pollMs, remainingMs));
     const cur = await safeObserve(page);
@@ -179,17 +200,17 @@ export async function observeWithSettle(page, prev, opts = {}) {
     }
     if (!last.ok) {
       last = cur;
-      matchStreak = countsForStability(cur) ? 1 : 0;
+      departed ||= changedFromBaseline(cur);
+      matchStreak = !isBusySnapshot(cur.snapshot) && (prevFp == null || departed) ? 1 : 0;
       continue;
     }
+    departed ||= changedFromBaseline(cur);
     if (cur.url === last.url && fingerprint(cur.snapshot) === fingerprint(last.snapshot)) {
-      // Inter-sample stable. Grow streak only if departed from baseline;
-      // otherwise we're stable on the LLM-seen state — keep polling.
-      if (countsForStability(cur)) matchStreak += 1;
+      if (!isBusySnapshot(cur.snapshot) && (prevFp == null || departed)) matchStreak += 1;
       else matchStreak = 0;
     } else {
       last = cur;
-      matchStreak = countsForStability(cur) ? 1 : 0;
+      matchStreak = !isBusySnapshot(cur.snapshot) && (prevFp == null || departed) ? 1 : 0;
     }
   }
 
@@ -200,6 +221,7 @@ export async function observeWithSettle(page, prev, opts = {}) {
     snapshot,
     url,
     settled,
+    settleReason,
     settleMs: Date.now() - t0,
     ...diff,
   };
@@ -209,18 +231,13 @@ const VERDICT_DEFAULT_POLL_MS = 250;
 const VERDICT_DEFAULT_STABLE_SAMPLES = 3;
 const VERDICT_DEFAULT_MAX_SETTLE_MS = 10000;
 
-// Extended assertion-style settle for terminal verification. Wraps
-// observeWithSettle with a longer poll, more stable samples, and a wider
-// budget — and crucially opts in to requireChange so the gate waits for the
-// page to actually depart from the LLM-seen state before declaring stability.
-// Without that, a static pre-transition state (form still visible while AJAX
-// is in flight) reaches the streak in ~500ms with the wrong snapshot.
+// Terminal verification uses the same change-aware settle with a wider budget.
 export async function observeForVerdict(page, prev, opts = {}) {
   return observeWithSettle(page, prev, {
     pollMs: opts.pollMs ?? VERDICT_DEFAULT_POLL_MS,
     stableSamples: opts.stableSamples ?? VERDICT_DEFAULT_STABLE_SAMPLES,
     maxSettleMs: opts.maxSettleMs ?? VERDICT_DEFAULT_MAX_SETTLE_MS,
-    requireChange: opts.requireChange ?? true,
+    changeGraceMs: opts.changeGraceMs ?? 1000,
   });
 }
 
@@ -238,6 +255,7 @@ export function compactObservation(obs) {
   if (!obs) return null;
   return {
     settled: obs.settled,
+    settleReason: obs.settleReason,
     settleMs: obs.settleMs,
     urlChanged: obs.urlChanged,
     snapshotChanged: obs.snapshotChanged,
@@ -304,13 +322,6 @@ export function formatPreviousActionResult(entry, observation, snapshot, nextUrl
 
   const lines = [];
 
-  // Wait gets a minimal block — no settle stats line.
-  if (entry.action.action === 'wait') {
-    lines.push(`Previous action: ${desc}.`);
-    appendChangeLines(lines, observation, snapshot, nextUrl);
-    return lines.join('\n');
-  }
-
   // Header line. Includes ERROR if the action threw, plus settle status.
   if (entry.error) {
     lines.push(`Previous action: ${desc} — ERROR: ${entry.error}`);
@@ -319,7 +330,7 @@ export function formatPreviousActionResult(entry, observation, snapshot, nextUrl
     }
   } else {
     const settleNote = observation.settled
-      ? `settled in ${observation.settleMs}ms`
+      ? `${observation.settleReason ?? 'settled'} in ${observation.settleMs}ms`
       : `did NOT settle within ${observation.settleMs}ms — page still mutating`;
     lines.push(`Previous action: ${desc} (${ms}ms; ${settleNote}).`);
   }

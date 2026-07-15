@@ -90,21 +90,6 @@ export async function inspectTarget(page, ref, snapshot) {
           }
           return null;
         })(),
-        nativeState: (() => {
-          if (!el.matches('input, textarea, select, option')) return null;
-          const selected = el.matches('select')
-            ? [...el.selectedOptions].map(option => option.value)
-            : el.matches('option') ? el.selected : null;
-          return {
-            type: el.getAttribute('type') || ('type' in el ? el.type : el.localName),
-            name: el.getAttribute('name'),
-            value: 'value' in el ? el.value : null,
-            checked: 'checked' in el ? el.checked : null,
-            selected,
-            disabled: Boolean(el.disabled),
-            inputValue: el.matches('input, textarea, select') ? el.value : null,
-          };
-        })(),
         css: candidates.find(candidate => {
           try { return document.querySelectorAll(candidate).length === 1; } catch { return false; }
         }) || null,
@@ -159,7 +144,6 @@ export async function inspectTarget(page, ref, snapshot) {
     return {
       target,
       locator: { playwright, css: dom.css, frameUrl: dom.frameUrl },
-      ...(dom.nativeState ? { nativeState: { before: dom.nativeState, after: null } } : {}),
     };
   } catch {
     const target = semantic?.name
@@ -167,31 +151,6 @@ export async function inspectTarget(page, ref, snapshot) {
       : semantic?.role || 'element';
     return { target, locator: { playwright: null, css: null, frameUrl: null } };
   }
-}
-
-export async function inspectTargetState(page, ref) {
-  if (!ref) return null;
-  try {
-    return await page.locator(`aria-ref=${ref}`).evaluate(nativeState);
-  } catch {
-    return null;
-  }
-}
-
-function nativeState(el) {
-  if (!el?.matches?.('input, textarea, select, option')) return null;
-  const selected = el.matches('select')
-    ? [...el.selectedOptions].map(option => option.value)
-    : el.matches('option') ? el.selected : null;
-  return {
-    type: el.getAttribute('type') || ('type' in el ? el.type : el.localName),
-    name: el.getAttribute('name'),
-    value: 'value' in el ? el.value : null,
-    checked: 'checked' in el ? el.checked : null,
-    selected,
-    disabled: Boolean(el.disabled),
-    inputValue: el.matches('input, textarea, select') ? el.value : null,
-  };
 }
 
 function semanticTarget(snapshot, ref) {

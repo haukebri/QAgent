@@ -1,7 +1,7 @@
 # QAgent consumer changelog
 
 This document covers consumer-facing changes released from **2026-07-06 through
-2026-07-15** in `v0.7.0` through `v0.9.0`, plus unreleased `v0.10.0` changes.
+2026-07-15** in `v0.7.0` through `v0.9.0`, plus `v0.11.0`.
 It is written for services that invoke the `qagent` CLI, consume its JSON or
 NDJSON output, or call `runQAgent()` directly.
 
@@ -13,7 +13,21 @@ NDJSON output, or call `runQAgent()` directly.
 | Claim verification, locale, recovery, and human verdicts | Released in `v0.8.0` |
 | Semantic action targets | Released in `v0.8.1` |
 | Proof-complete verification and behavioral reliability | Released in `v0.9.0` |
-| Uniform frozen evidence and exact verifier fidelity | Planned for `v0.10.0` |
+| Uniform frozen evidence and exact verifier fidelity | Superseded before release |
+| Single outcome verification | `v0.11.0` |
+
+## v0.11.0 — 2026-07-15
+
+- QAgent again uses one natural-language goal and one independent final
+  verifier judgment, removing claim decomposition and local assertion logic.
+- Removed verifier-specific contracts, claim metadata, citations, and
+  structured evidence plumbing from the runtime and public result format.
+- Successful clicks no longer need a visible snapshot change before the driver
+  can continue, preventing repeated selection of wrapper-backed controls.
+- The verifier benchmark now replays six real browser outcomes and reports
+  final-verdict agreement instead of claim-pipeline internals.
+- Live release reporting separates browser completion from verifier agreement
+  across Reply, Vorwerk, and one calculator journey, each repeated three times.
 
 `v0.7.0` points to commit `faf1d35`. `v0.8.0` points to commit `b9a73d7` and
 contains the 15 commits made after `v0.7.0`.
@@ -21,49 +35,18 @@ contains the 15 commits made after `v0.7.0`.
 ## Migration checklist
 
 - Keep using `outcome` as the authoritative `pass`, `fail`, or `error` result.
-- Allow additive JSON fields. Output can contain `finalScreenshot`, `checks`,
-  `verifierMode`, `humanEvidence`, `goalContract`, `browserEvidence`,
-  `failureKind`, and `excludedItems`; JSON and trace payloads also contain
-  `locale`.
+- JSON and trace output contains `goal`, `outcome`, `evidence`,
+  `finalUrl`, `steps`, optional screenshots, statistics, warnings, locale,
+  and failure details.
 - Allow `goBack` in the `action.action` union of streamed turn events.
-- Use `checks` and compact `evidence` for automation and debugging. Use
-  `humanEvidence ?? evidence` for text shown to people.
-- Do not interpret `verifierMode: "single"` and `checks: []` as "nothing was
-  checked". It means claim decomposition failed and QAgent used its older
-  single-call verifier.
-- Treat a claim with `verdict: "unknown"` as visible missing proof; QAgent now
-  returns a failed outcome for it.
+- Use `outcome` for automation and `evidence` for the decisive verifier
+  rationale. Removed claim/check fields are not emitted in v0.11.0.
 - Do not match browser-action error strings exactly. Overlay errors now include
   page text, available controls, and recovery guidance.
-- Revisit verifier budgets and timeouts. In `v0.10.0`, verification uses one
-  decomposition call plus one call per claim; human evidence uses no model call.
-- Write goals as stable, visibly checkable claims. Prefer named UI text, items,
-  URLs, and dialog contents over vague states, volatile counts, or mandatory
-  retry wording.
-
-## v0.10.0 — unreleased
-
-- Driver and verifier now share one auditable goal contract; tests that
-  explicitly bind only an Acceptance section are verified against that section
-  while retaining the full goal as execution guidance.
-- Action evidence now records stable IDs, control-group context, resulting
-  native state, and bounded visible-text changes, improving both driver progress
-  detection and verifier accuracy.
-- Verifier claims are now grounded in the shared goal and stable evidence IDs;
-  deterministic browser facts are checked locally, while the LLM is limited to
-  semantic judgments.
-- Initial and terminal browser states now share one bounded settle-and-freeze
-  boundary, and persisted screenshots match the evidence judged by the
-  verifier.
-- The driver now treats exact named products, values, routes, URLs, and required
-  steps as binding constraints instead of substituting similar alternatives.
-- Conditional goal requirements now preserve their trigger during verification,
-  so untriggered branches are not treated as unconditional missing actions.
-- Verifier checks now separate recorded actions, the driver final response, and
-  the final snapshot, preventing visible controls from being mistaken for
-  clicks while allowing final-summary requirements to inspect the actual text.
-- Human verdict text is now generated deterministically from authoritative
-  claim checks, eliminating contradictory prose and one verifier model call.
+- Budget one normal verifier call per run, with one retry only after an invalid
+  provider or protocol response.
+- Write goals around a stable observable outcome. Mention routes, interactions,
+  or transient UI only when they are part of the requested outcome.
 
 ## v0.9.0 — 2026-07-15
 

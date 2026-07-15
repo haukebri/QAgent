@@ -1,157 +1,80 @@
-# qa harness architecture
+# QAgent architecture
 
-AI-driven QA testing. Browser is driven by script. LLM is the decider.
+QAgent runs one natural-language browser goal and asks an independent verifier
+for one final outcome judgment.
 
-## modules
+## Modules
 
-QAgent is currently a single-goal CLI with a public runner API. There is no spec
-planner layer in the shipped package; `runner.js` is the browser orchestration
-boundary used by both the CLI and package integrations.
+### CLI and runner
 
-### cli.js
+The CLI resolves configuration, provider, model, authentication, and reporters.
+runQAgent validates the goal and URL, launches the browser, pre-navigates, runs
+the executor, and closes the browser. Setup and browser failures become stable
+error outcomes with failure kind execution.
 
-Entry point for `qagent`. Parses argv, dispatches `qagent config`, layers
-flag/env/project/user config, resolves provider/model/API-key values, creates
-reporters, calls `runQAgent()`, and maps the result to an exit code.
+### Browser and tools
 
-### runner.js
+The browser module owns Chromium lifecycle and headed/headless defaults. The
+tools module exposes the local Playwright action set: observe, click, fill,
+selectOption, pressKey, type, goBack, and setup-only navigate. Accessibility
+refs stay inside the driver protocol; public steps use semantic targets and
+optional reusable locator metadata.
 
-Public package boundary for running one goal. Exports `runQAgent({ url, goal,
-model, resolveRequestAuth, verifierModel, maxTurns, headed, locale, testTimeoutMs,
-networkTimeoutMs, actionTimeoutMs, evidenceDir, onStart, onTurn })`. It validates and
-normalizes the URL, strips basic-auth credentials into Playwright
-`httpCredentials`, launches and closes the browser, pre-navigates to the URL,
-calls `runTodo()`, and shapes runtime/pre-navigation crashes into stable result
-objects.
+### Executor
 
-### browser.js
+The executor settles and observes the page, sends the goal and current browser
+context to the driver, performs one returned JSON action, and records compact
+history. History keeps the action, target, URL, observation, success, and error.
+It also keeps action screenshots, recovery details, timing, and token/cost data.
 
-Browser lifecycle. Exports `launchPage({ httpCredentials, headed, locale })`, opens
-Chrome with bundled Chromium fallback, applies stealth defaults (UA, optional
-locale, local timezone, viewport, webdriver init script), and returns
-`{ browser, page }`. Single source of truth for the bot-detection escalation
-ladder below.
+Repeated ineffective actions remain bounded. A successful click is reported as
+successful even when URL and accessibility snapshot are unchanged, so the
+driver can continue instead of retrying a wrapper-backed control.
 
-### tools.js
+Every exit uses one final settle-and-freeze boundary. The final URL, snapshot,
+and failure screenshot are captured before verification.
 
-Browser surface. `observe(page)` returns Playwright's ai-mode ariaSnapshot YAML
-with refs baked in as `[ref=eN]`. `click`, `fill`, `selectOption`, `pressKey`,
-and `type` resolve refs via `aria-ref=${ref}` and mutate the page. Before each
-referenced action, the executor records a semantic target plus unique
-Playwright/CSS locator candidates. The same action record also carries a stable
-evidence ID, before/after page-state IDs, explicit success, native control state
-when exposed, nearby group/question context, and bounded visible-text changes.
-Refs remain internal and are stripped from public events and results. `navigate` is used by `runner.js` for
-setup/pre-navigation; it is not exposed as a driver action.
+### Verifier
 
-### executor.js
+The verifier receives the same goal as the driver, the frozen final URL and
+snapshot, compact successful and failed action history, and the driver's
+terminal response as non-authoritative context. It makes one normal-path LLM
+call returning a pass or fail outcome and one evidence sentence.
 
-Driver loop for one goal. It observes and settles the page, sends one complete
-current accessibility snapshot while scrubbing older snapshots, asks the driver LLM for one JSON action through
-`pi-agent-core`, executes the local Playwright action, records history, detects
-repeated no-progress actions, constrains unsafe browser-back recovery, and exits
-on `done`, `fail`, stuck, timeout, or turn cap. Driver terminal messages are
-evidence only. Initial and terminal states use the same bounded
-settle-and-freeze boundary; the final URL, snapshot, and failure screenshot are
-captured before verification. When `evidenceDir` is set, it saves viewport
-JPEGs before executed browser actions and once at that frozen final state. The
-final outcome is still decided by `verifier.js`.
+Verification is outcome-first. History matters when the goal explicitly
+requires a route or interaction, or when a requested confirmation was
+transient. Provider, JSON, and schema failures are retried once; two invalid
+responses produce an error outcome with failure kind verifier.
 
-### verifier.js
+### Supporting modules
 
-End-state judge. It decomposes only the shared binding goal into source-quoted
-assertions and non-binding instructions. Each assertion receives relevant stable
-action/page-state evidence IDs; exact copy, exact URLs, action success, and native
-control facts are resolved locally. Semantic checks may cite only supplied IDs,
-and verdicts are derived from validated support/contradiction sets rather than
-prose. A required contradiction or unknown fails. Invalid source/evidence
-grounding is a verifier protocol error after retry; ordinary decomposition
-provider/parse failure retains the binding-goal single-call fallback. Existing
-`outcome`, `checks`, `evidence`, and `humanEvidence` remain authoritative and
-compatible, with additive source, citation, and `failureKind` metadata.
+- observe-settle.js: page stability, compact diffs, and previous-action text.
+- json.js: robust extraction of the first complete JSON object.
+- llm-auth.js and providers.js: model authentication and provider metadata.
+- evidence.js: optional per-step and final screenshots.
+- reporters.js and recorder.js: list, JSON, NDJSON, and trace output.
 
-### llm-auth.js
+## Data flow
 
-Adapts pi-ai streaming to QAgent's auth boundary. The standalone CLI supplies
-`{ apiKey }`; a Pi package can supply `{ apiKey, headers }` from Pi's model
-registry.
+    CLI goal + URL
+      -> config/provider/auth resolution
+      -> browser launch + pre-navigation
+      -> executor: settle -> driver action -> local Playwright action
+      -> final settle and frozen browser state
+      -> one independent verifier judgment
+      -> result/reporters
 
-### providers.js
+Public results contain the goal, outcome, evidence, final URL, steps, optional
+screenshot, statistics, warnings, and technical failure information. QAgent
+does not expose claim decomposition, goal contracts, evidence IDs, citations,
+or per-claim verdicts.
 
-Standalone CLI provider metadata and API-key resolution. `provider` defaults to
-`openrouter`; top-4 provider env vars are recognized after `QAGENT_API_KEY`.
+Independent checkpoints should be separate QAgent runs. Durable workflow
+assertions belong in Playwright.
 
-### config.js / config-cmd.js
+## Code rules
 
-User/project config loading, coercion, validation, and `qagent config` commands.
-User config is `~/.config/qagent/config.json`; project config is
-`./qagent.config.json` in the current working directory.
-
-### observe-settle.js
-
-Page stability, fingerprinting, previous-action diffs, compact observation
-payloads, and bounded `changed`, `no-change`, or `timeout` settle results.
-
-### json.js
-
-Shared extraction of the first complete JSON object from driver and verifier
-model responses, including quoted braces and escaped quotes.
-
-### reporters.js / recorder.js
-
-Human list output, JSON, NDJSON, and trace-file output. `recorder.js` builds the
-trace payload and writes `results/*.json` for the `trace` reporter. `list` prints
-the human-facing `humanEvidence`; JSON, NDJSON, and trace payloads include both
-`humanEvidence` and the detailed `evidence`/`checks` fields.
-
-## dependencies
-
-- `playwright`: browser driver. Used by `browser.js`, `tools.js`, and the
-  settle/observe helpers.
-- `@earendil-works/pi-ai`: model lookup and streaming across providers. Selected via the `provider` config key (default `openrouter`).
-- `@earendil-works/pi-agent-core`: stateful driver and verifier LLM conversations. Browser actions still run through QAgent's executor/tools modules.
-
-## data flow
-
-```
-CLI goal + URL
-  -> config/provider/API-key resolution
-  -> public runner creates one shared goal contract
-  -> browser launch + pre-navigate
-  -> executor receives full guidance + binding verification goal
-  -> executor loop: observe/settle -> LLM JSON action -> local tool
-  -> verifier checks only the shared binding goal + summarizes human verdict
-  -> reporters emit list/json/ndjson/trace output
-```
-
-## rules
-
-- Functions first; avoid domain classes. Small error subclasses are okay.
-- No folders until a module outgrows a file.
-- No TypeScript until something breaks without it.
-- Prefer explicit function arguments at module boundaries.
-- Split or simplify when a file becomes a dumping ground.
-
-## bot-detection escalation
-
-Default launch uses `channel: 'chrome'`, a realistic user-agent, optional locale,
-the host machine's timezone, viewport, and an init script that hides
-`navigator.webdriver`.
-This is enough for most sites (verified: aida.de Akamai, npmjs.com
-Cloudflare, google.com all pass).
-
-If a site still blocks after that, escalate in this order:
-
-1. Drop-in `patchright` in place of `playwright` (~49 stealth patches).
-2. Residential proxy via `chromium.launch({ proxy })`.
-3. CAPTCHA solver (CapSolver, 2captcha) for Cloudflare Turnstile.
-
-Network navigation uses `waitUntil: 'load'` with a bounded timeout
-('networkidle' is discouraged by Playwright — chatty sites with analytics
-or polling rarely settle). SPA route hydration and post-action mutation are
-absorbed by the settle loop in `observe-settle.js`, which allows a bounded grace
-period for departure from the pre-action state and then requires URL + snapshot
-stability. Explicit wait actions use the same settle path after their requested
-minimum delay. Navigate timeouts are fatal inside the executor
-loop (outcome `error`, exit code 3); any other exception also becomes
-`error` so every run produces a result file.
+- Functions first; avoid domain classes.
+- Keep modules flat until a file genuinely outgrows its role.
+- Use ES modules and explicit function arguments.
+- Keep browser actions local; LLMs choose and judge but never execute tools.

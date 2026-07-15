@@ -1,10 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { Agent } from '@earendil-works/pi-agent-core';
 import { streamWithRequestAuth } from './llm-auth.js';
-import { observe, visibleText, inspectTarget, inspectTargetState, click, fill, selectOption, pressKey, type, goBack } from './tools.js';
+import { observe, visibleText, inspectTarget, click, fill, selectOption, pressKey, type, goBack } from './tools.js';
 import { verify } from './verifier.js';
 import { extractJsonObject } from './json.js';
-import { createGoalContract } from './goal-contract.js';
 import { observeWithSettle, observeForVerdict, compactObservation, formatPreviousActionResult } from './observe-settle.js';
 
 const SNAPSHOT_BEGIN = '<<SNAPSHOT_BEGIN>>';
@@ -72,9 +71,7 @@ export async function runTodo(
   testTimeoutMs = 300_000,
   actionTimeoutMs = 2_000,
   evidenceRecorder = null,
-  suppliedGoalContract = null,
 ) {
-  const goalContract = suppliedGoalContract ?? createGoalContract(goal);
   const t0 = Date.now();
   const emitTurn = entry => onTurn?.(toPublicStep(entry));
 
@@ -98,18 +95,10 @@ export async function runTodo(
   let finalUrl = '';
   let finalVisibleText = '';
   let observed = false;
-  let actionSequence = 0;
-  let observationSequence = 0;
-  let currentObservationId = null;
-  const pageStates = [];
   const recordPageState = (snapshot, url, text) => {
-    const state = { id: `page-${++observationSequence}`, url, visibleText: text };
-    pageStates.push(state);
-    currentObservationId = state.id;
     finalSnapshot = snapshot;
     finalUrl = url;
     finalVisibleText = text;
-    return state.id;
   };
   const recentRefActions = [];
   const warnedSignatures = new Set();
@@ -135,9 +124,8 @@ export async function runTodo(
         snapshot = settle.snapshot;
         url = settle.url;
         observation = settle;
-        const observationId = recordPageState(snapshot, url, settle.visibleText);
-        prev.actionEntry.afterObservationId = observationId;
-        prev.actionEntry.observation = { id: observationId, ...compactObservation(observation) };
+        recordPageState(snapshot, url, settle.visibleText);
+        prev.actionEntry.observation = compactObservation(observation);
       } else if (!observed) {
         const settle = await observeWithSettle(page, null);
         snapshot = settle.snapshot;
@@ -159,7 +147,7 @@ export async function runTodo(
       }
 
       if (pendingRefAction && observation) {
-        const noProgress = !observation.urlChanged && !observation.snapshotChanged && !nativeActionSatisfied(pendingRefAction.entry);
+        const noProgress = !observation.urlChanged && !observation.snapshotChanged;
         recentRefActions.push({ sig: pendingRefAction.sig, noProgress });
         if (recentRefActions.length > STUCK_WINDOW) recentRefActions.shift();
 
@@ -186,7 +174,7 @@ export async function runTodo(
       const previousActionResult = observation && history.length > 0
         ? formatPreviousActionResult(history[history.length - 1], observation, snapshot, url)
         : null;
-      const { action, usage, parseError, llmError } = await askNextAction({ agent, goalContract, url, snapshot, lastError, previousActionResult, recentActions });
+      const { action, usage, parseError, llmError } = await askNextAction({ agent, goal, url, snapshot, lastError, previousActionResult, recentActions });
       if (usage) {
         tokens.input += usage.input ?? 0;
         tokens.output += usage.output ?? 0;
@@ -236,7 +224,6 @@ export async function runTodo(
         break;
       }
 
-      const evidenceId = `action-${++actionSequence}`;
       let targetInfo = null;
       if (REF_ACTIONS.has(action.action) && action.ref) {
         if (!snapshot.includes(`[ref=${action.ref}]`)) {
@@ -245,9 +232,6 @@ export async function runTodo(
             turn: turns,
             atMs: Date.now() - t0,
             action,
-            evidenceId,
-            beforeObservationId: currentObservationId,
-            afterObservationId: currentObservationId,
             success: false,
             target: 'element no longer present in the current page',
             url,
@@ -271,9 +255,6 @@ export async function runTodo(
             turn: turns,
             atMs: Date.now() - t0,
             action,
-            evidenceId,
-            beforeObservationId: currentObservationId,
-            afterObservationId: currentObservationId,
             success: false,
             ...targetInfo,
             url,
@@ -288,15 +269,13 @@ export async function runTodo(
 
       const entry = {
         turn: turns, atMs: Date.now() - t0, action, ...targetInfo,
-        evidenceId,
-        beforeObservationId: currentObservationId,
       };
       if (usage) entry.tokens = stepTokens(usage);
       await addStepScreenshot(entry, evidenceRecorder, page);
       const tAction = Date.now();
       try {
         if (action.action === 'goBack') {
-          const reason = backRecoveryError(goalContract.fullGoal, reversibleNavigations);
+          const reason = backRecoveryError(goal, reversibleNavigations);
           if (reason) throw new Error(reason);
         }
         let recoveredVia = null;
@@ -311,7 +290,6 @@ export async function runTodo(
         entry.ms = Date.now() - tAction;
         entry.url = page.url();
         entry.success = true;
-        if (entry.nativeState) entry.nativeState.after = await inspectTargetState(page, action.ref);
         if (recoveredVia) entry.recoveredVia = recoveredVia;
         history.push(entry);
         await emitTurn(entry);
@@ -322,7 +300,6 @@ export async function runTodo(
         entry.url = page.url();
         entry.error = msg;
         entry.success = false;
-        if (entry.nativeState) entry.nativeState.after = await inspectTargetState(page, action.ref);
         history.push(entry);
         await emitTurn(entry);
         lastError = msg;
@@ -353,15 +330,13 @@ export async function runTodo(
     finalSnapshot = frozen.snapshot;
     finalUrl = frozen.url;
     finalVisibleText = frozen.visibleText;
-    const finalObservationId = recordPageState(finalSnapshot, finalUrl, finalVisibleText);
-    pageStates.at(-1).final = true;
+    recordPageState(finalSnapshot, finalUrl, finalVisibleText);
     const lastEntry = history.at(-1);
     if (lastEntry?.action?.action === 'done' || lastEntry?.action?.action === 'fail') {
       lastEntry.url = finalUrl;
-      lastEntry.observation = { id: finalObservationId, ...compactObservation(frozen), terminal: true };
+      lastEntry.observation = { ...compactObservation(frozen), terminal: true };
     } else if (prev && prev.actionEntry.observation == null) {
-      prev.actionEntry.afterObservationId = finalObservationId;
-      prev.actionEntry.observation = { id: finalObservationId, ...compactObservation(frozen) };
+      prev.actionEntry.observation = compactObservation(frozen);
     }
   } catch {
     // Best-effort; keep the latest complete sample if the page disappeared.
@@ -382,14 +357,13 @@ export async function runTodo(
   if (fatalError !== null) {
     return {
       outcome: 'error',
-      failureKind: 'technical',
-      goal: goalContract.fullGoal, goalContract,
+      failureKind: 'execution',
+      goal,
       evidence: fatalError,
       llmVerdict: sanitizeAction(verdict),
       turns, elapsedMs,
       tokens, verifierTokens: null,
       finalUrl, finalSnapshot, failureScreenshot: frozenScreenshot,
-      browserEvidence: { pageStates },
       ...(finalScreenshot ? { finalScreenshot } : {}),
       history: history.map(toPublicStep), warnings,
     };
@@ -413,33 +387,23 @@ export async function runTodo(
 
   let outcome;
   let evidence;
-  let humanEvidence;
-  let checks = [];
-  let excludedItems = [];
-  let verifierMode = null;
   let verifierTokens = null;
   let failureKind = null;
   try {
-    const result = await verify(goalContract.verificationGoal, verifierVerdict, history, finalUrl, finalSnapshot, judgeModel, resolveRequestAuth, { pageStates });
+    const result = await verify(goal, verifierVerdict, history, finalUrl, finalSnapshot, judgeModel, resolveRequestAuth);
     outcome = result.outcome;
     evidence = result.evidence;
-    humanEvidence = result.humanEvidence;
-    checks = result.checks ?? [];
-    excludedItems = result.excludedItems ?? [];
-    verifierMode = result.verifierMode ?? null;
     failureKind = result.failureKind ?? null;
     warnings.push(...(result.warnings ?? []));
     verifierTokens = result.tokens;
   } catch (err) {
     const message = err.message.split('\n')[0];
-    verifierMode = err.verifierMode ?? verifierMode;
     warnings.push(...(err.warnings ?? []));
     warnings.push(`verifier unavailable: ${message}`);
     outcome = 'error';
     failureKind = err.failureKind ?? 'verifier';
     verifierTokens = err.tokens ?? null;
     evidence = `verifier unavailable: ${message}`;
-    humanEvidence = evidence;
   }
 
   const failureScreenshot = outcome !== 'pass' ? frozenScreenshot : null;
@@ -447,30 +411,15 @@ export async function runTodo(
   return {
     outcome,
     failureKind,
-    goal: goalContract.fullGoal, goalContract,
+    goal,
     evidence,
-    humanEvidence,
     llmVerdict: sanitizeAction(verdict),
     turns, elapsedMs,
     tokens, verifierTokens,
     finalUrl, finalSnapshot, failureScreenshot,
-    browserEvidence: { pageStates },
     ...(finalScreenshot ? { finalScreenshot } : {}),
-    history: history.map(toPublicStep), warnings, checks, excludedItems, verifierMode,
+    history: history.map(toPublicStep), warnings,
   };
-}
-
-function nativeActionSatisfied(entry) {
-  if (!entry?.success || !entry.nativeState?.after) return false;
-  const { action, nativeState: { after } } = entry;
-  if (action.action === 'click' && after.checked === true) return true;
-  if (action.action === 'fill' || action.action === 'type') return after.inputValue === action.value;
-  if (action.action === 'selectOption') {
-    const wanted = Array.isArray(action.value) ? action.value : [action.value];
-    const selected = Array.isArray(after.selected) ? after.selected : [after.value];
-    return wanted.every(value => selected.includes(value));
-  }
-  return false;
 }
 
 export function backRecoveryError(goal, reversibleNavigations) {
@@ -550,10 +499,10 @@ function oneLine(value) {
   return String(value ?? 'unknown error').split('\n')[0];
 }
 
-async function askNextAction({ agent, goalContract, url, snapshot, lastError, previousActionResult, recentActions }) {
+async function askNextAction({ agent, goal, url, snapshot, lastError, previousActionResult, recentActions }) {
   const isFirstTurn = agent.state.messages.length === 0;
   const message = isFirstTurn
-    ? buildInitialPrompt({ goalContract, url, snapshot })
+    ? buildInitialPrompt({ goal, url, snapshot })
     : buildFollowUpPrompt({ url, snapshot, lastError, previousActionResult, recentActions });
   await agent.prompt(message);
   const last = [...agent.state.messages].reverse().find(m => m.role === 'assistant');
@@ -627,10 +576,9 @@ function normalizeActionShape(parsed) {
   return { error: `unsupported shorthand "${verb}"` };
 }
 
-function buildInitialPrompt({ goalContract, url, snapshot }) {
+function buildInitialPrompt({ goal, url, snapshot }) {
   return (
-    `Execution guidance (original goal):\n${goalContract.fullGoal}\n\n` +
-    `Binding verification goal (${goalContract.source}):\n${goalContract.verificationGoal}\n\n` +
+    `Goal:\n${goal}\n\n` +
     `Current URL: ${url}\n\n` +
     `${SNAPSHOT_BEGIN}\n${snapshot}\n${SNAPSHOT_END}\n\n` +
     `Next action (JSON only):`

@@ -91,7 +91,7 @@ function listReporter() {
           : result.outcome === 'fail'
             ? `${c.red}✗ FAIL${c.reset}`
             : `${c.red}✗ ERROR${c.reset}`;
-      process.stdout.write(`\n${tag} — ${result.humanEvidence ?? result.evidence}\n`);
+      process.stdout.write(`\n${tag} — ${result.evidence}\n`);
       process.stdout.write(`${c.dim}${result.turns} turns · ${elapsedS}s · $${totalCost.toFixed(4)}${c.reset}\n`);
     },
   };
@@ -119,11 +119,9 @@ function ndjsonReporter() {
       const envelope = {
         event: 'done',
         goal: ctx.goal,
-        goalContract: result.goalContract ?? null,
         outcome: result.outcome,
         failureKind: result.failureKind ?? null,
         evidence: result.evidence,
-        humanEvidence: result.humanEvidence ?? null,
         turns: result.turns,
         elapsedMs: result.elapsedMs,
         driverCost,
@@ -132,12 +130,8 @@ function ndjsonReporter() {
         driverTokens,
         verifierTokens,
         totalTokens: driverTokens + verifierTokens,
-        verifierMode: result.verifierMode ?? null,
         finalUrl: result.finalUrl,
         finalScreenshot: result.finalScreenshot,
-        checks: result.checks ?? [],
-        excludedItems: result.excludedItems ?? [],
-        browserEvidence: result.browserEvidence ?? { pageStates: [] },
         warnings: result.warnings ?? [],
       };
       process.stdout.write(JSON.stringify(envelope) + '\n');

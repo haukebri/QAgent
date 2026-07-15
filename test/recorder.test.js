@@ -10,17 +10,12 @@ test('records locale in trace payloads', () => {
     outcome: 'pass',
     llmVerdict: null,
     evidence: 'ok',
-    humanEvidence: 'Looks good.',
     finalUrl: 'https://example.test',
     turns: 0,
     elapsedMs: 0,
     tokens: null,
     verifierTokens: null,
-    verifierMode: 'checks',
     failureKind: null,
-    goalContract: { fullGoal: 'goal', verificationGoal: 'binding goal', source: 'acceptance' },
-    browserEvidence: { pageStates: [{ id: 'page-1', final: true }] },
-    excludedItems: [{ id: 'instruction-1', kind: 'instruction' }],
     history: [{
       turn: 1,
       action: { action: 'click', ref: 'e1' },
@@ -30,21 +25,13 @@ test('records locale in trace payloads', () => {
       recoveredVia: 'overlay',
     }],
     warnings: [],
-    checks: [
-      { claim: 'claim one', verdict: 'yes', evidence: 'seen' },
-    ],
   }, 'de-DE');
 
   assert.equal(payload.locale, 'de-DE');
-  assert.equal(payload.verifierMode, 'checks');
-  assert.equal(payload.goalContract.source, 'acceptance');
-  assert.equal(payload.browserEvidence.pageStates[0].id, 'page-1');
-  assert.equal(payload.excludedItems[0].kind, 'instruction');
   assert.equal(payload.evidence, 'ok');
-  assert.equal(payload.humanEvidence, 'Looks good.');
-  assert.deepEqual(payload.checks, [
-    { claim: 'claim one', verdict: 'yes', evidence: 'seen' },
-  ]);
+  for (const removed of ['goalContract', 'checks', 'excludedItems', 'verifierMode', 'humanEvidence', 'browserEvidence']) {
+    assert.equal(removed in payload, false);
+  }
   assert.equal(payload.steps[0].recoveredVia, 'overlay');
   assert.equal(payload.steps[0].action.ref, undefined);
   assert.equal(payload.steps[0].target, 'button "Submit"');
@@ -58,8 +45,7 @@ test('trace recording persists the supplied frozen failure evidence', async () =
   const dir = await mkdtemp(join(tmpdir(), 'qagent-trace-'));
   const result = {
     outcome: 'fail',
-    evidence: 'failed claim',
-    humanEvidence: 'Failed required claim.',
+    evidence: 'The required outcome is absent.',
     finalUrl: 'https://example.test',
     finalSnapshot: '- heading "Frozen"',
     failureScreenshot: Buffer.from('frozen screenshot'),

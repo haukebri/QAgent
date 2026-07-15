@@ -41,18 +41,7 @@ const ref = (context, pattern) => {
   return match[1];
 };
 const action = fn => context => fauxAssistantMessage(JSON.stringify(fn(context)));
-const decomposition = (sourceQuote, comparison = 'semantic') => fauxAssistantMessage(JSON.stringify({
-  items: [{ id: 'claim-1', text: sourceQuote, sourceQuote, kind: 'assertion', comparison }],
-}));
-const citedPage = (support, evidence) => context => {
-  const ids = [...JSON.stringify(context).matchAll(/\\?"id\\?":\s*\\?"(page-[^\\"]+)/g)].map(match => match[1]);
-  return fauxAssistantMessage(JSON.stringify({
-    supportingEvidenceIds: support ? [ids.at(-1)] : [],
-    contradictingEvidenceIds: support ? [] : [ids.at(-1)],
-    evidence,
-  }));
-};
-const verifyYes = sourceQuote => [decomposition(sourceQuote), citedPage(true, `Concrete browser evidence verifies: ${sourceQuote}`)];
+const verifyYes = evidence => [fauxAssistantMessage(JSON.stringify({ outcome: 'pass', evidence }))];
 
 const definitions = [
   {
@@ -85,8 +74,7 @@ const definitions = [
     goal: 'Add the exact PB440 product. Do not substitute a similar product; fail if PB440 is unavailable.',
     responses: [
       fauxAssistantMessage('{"action":"fail","reason":"PB440 is unavailable; only Similar VM7 is offered."}'),
-      decomposition('Add the exact PB440 product.'),
-      citedPage(false, 'The page offers only Similar VM7, not PB440.'),
+      fauxAssistantMessage('{"outcome":"fail","evidence":"The page offers only Similar VM7, not PB440."}'),
     ],
     complete: () => false,
     satisfied: result => result.llmVerdict?.action === 'fail' &&

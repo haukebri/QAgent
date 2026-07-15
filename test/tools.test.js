@@ -32,10 +32,6 @@ test('describes targets with semantic and stable locators', async () => {
         css: 'input[name="email"]',
         frameUrl: null,
       },
-      nativeState: {
-        before: { type: 'text', name: 'email', value: '', checked: false, selected: null, disabled: false, inputValue: '' },
-        after: null,
-      },
     });
     const continueRef = refFor('Continue');
     assert.deepEqual(await inspectTarget(page, continueRef, snapshot), {

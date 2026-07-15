@@ -7,7 +7,7 @@ QAgent is a verification layer for Claude Code, Codex, and other agentic dev loo
 [![npm version](https://img.shields.io/npm/v/@qagent/cli.svg)](https://www.npmjs.com/package/@qagent/cli)
 [![license](https://img.shields.io/npm/l/@qagent/cli.svg)](LICENSE)
 
-![QAgent driving a real browser via Playwright while a separate verifier LLM checks each goal claim against the run and returns a structured verdict to the coding agent](docs/demo/demo-gif.gif)
+![QAgent driving a real browser via Playwright while a separate verifier LLM judges the final observable outcome](docs/demo/demo-gif.gif)
 
 > **Status:** pre-1.0, experimental. One inline goal per invocation; multi-goal specs and orchestration are not yet built. `--max-turns` (default 50) is the main spending cap.
 
@@ -31,7 +31,9 @@ QAgent runs the browser turns in a separate loop. Your coding agent gets back a 
 
 ![QAgent run ending in a red FAIL verdict — saucedemo login flow, step 3 failed, 3 turns, 15.2s, $0.0003](docs/demo/product-shoot-fail.png)
 
-Every run returns a verdict your coding agent can act on: the goal it tried, the steps it took, the final URL, and the rationale behind the call. A separate verifier LLM decomposes your goal into individual claims and checks each one against the full run — so the agent that drove the browser isn't also the one grading its own work, and a failed run names the exact claim that broke (`checks` in the JSON output). Easy to paste back into Claude Code or Codex so the next turn already knows what to fix. No flaky test infrastructure to maintain, no spec files to update when the UI shifts.
+Every run returns the goal, steps, final URL, and a decisive evidence sentence. A
+separate verifier LLM judges the overall observable outcome in one call, so the
+agent that drove the browser is not grading its own work.
 
 ---
 
@@ -165,7 +167,7 @@ These are observed minimums on real-world targets — pages with grouped fields,
 
 Cost notes:
 - Costs above are observed on a Gravity Forms multi-required-field test page; expect variation by snapshot size and turn count. Each turn sends one complete current accessibility snapshot to the driver and scrubs older snapshots, so denser pages cost more per turn.
-- The verifier runs at the end (or on `done`/`fail`): one call to decompose the goal into claims, then one check per claim. Human verdict text is formatted locally from those checks, with no summary-model call. The calls share the run transcript as a common prefix, so provider prompt caching keeps the added cost small; goals with more steps mean more (cheap) check calls.
+- The verifier runs once at the end. Provider, JSON, or schema errors get one retry.
 - `--max-turns` (default 50) is the hard cap on driver spend; reduce it to bound worst-case cost on flaky models or pages.
 
 Rule of thumb: if the page has more than ~3 required fields, more than one input type, or any group/checkbox-array pattern, do not use a `nano`-class model for the driver.
@@ -176,7 +178,10 @@ Rule of thumb: if the page has more than ~3 required fields, more than one input
 
 Whether you or your coding agent writes the goal, the rules are the same. A good goal tells the driver **what to do** and tells the verifier **how to know it worked**.
 
-The verifier breaks your goal into individual claims and checks each against the whole run — the actions taken, how the page changed after each one, and the final state. Each claim comes back `yes`, `no`, or `unknown`. A pass requires `yes` for every claim; `no` and unverified `unknown` claims fail with concrete evidence. So the craft is: **write every step as something the browser can visibly confirm.**
+The verifier judges the frozen final state against the same goal the driver
+received. Compact history supports explicitly required routes, interactions,
+and transient confirmations. Name the observable outcome that should decide the
+run.
 
 ### Your wording sets the verification scope
 
@@ -197,10 +202,8 @@ whether a user can complete the flow. The second also checks the approved copy.
 Do not add exact wording, routes, counts, or intermediate steps unless a mismatch
 should fail the test.
 
-When a goal needs detailed driver guidance that should not become part of the
-verdict, write `Only the Acceptance section is binding.` and add an exact
-`Acceptance:` heading. QAgent keeps the full goal for execution and verifies
-only that section. Without both explicit markers, the full goal remains binding.
+QAgent does not parse a separate Acceptance contract. Use separate QAgent runs
+for independent checkpoints and Playwright for deterministic workflow audits.
 
 Precision is not the same as accuracy. A precisely written expectation can
 still be wrong or impossible to prove. Browser tests can verify a displayed
@@ -225,14 +228,14 @@ Replace vague end-states ("I will see the result page") with the literal text or
 >
 > ❌ `End: I will see the 'result' page which tells me that I have sent the form`
 
-### Write steps as checkable claims
+### Write goals around observable outcomes
 
 - **Choose semantic or exact wording deliberately.** For a functional test, `click the button that says something like "Submit Inquiry"` allows harmless wording changes. For a copy test, write `the button text must be exactly "Submit Inquiry"`. Leave volatile values out of exact quotes: a goal that requires `"Weitere 6 Produkte anzeigen"` fails when the site has 7 products; write `the button for showing more products (the number varies)` unless the number itself matters.
 - **Name expected items instead of counting them.** `the section shows "Kobold VM7" and "Kobold VG100+"` is reliably checkable; `exactly two offers` makes a small verifier model count — and miscount.
 - **Describe transient UI by its visible content.** A popup is gone from the final page; `a dialog appears offering "Weiter einkaufen" and "Zur Kasse"` gives the verifier the exact text that shows up when the dialog opens.
 - **Phrase retries and error handling conditionally.** `If the page shows "There was a problem", fix the named fields and submit again` is satisfied by a first-try success; `submit repeatedly until errors are gone` fails a run that never needed a retry.
 - **Treat exact requirements as binding.** Named products, values, routes, URLs, prohibitions, and mandatory steps are not interchangeable with similar alternatives. State permitted alternatives explicitly when either is acceptable.
-- **Assert URLs where they matter.** `which redirects to /shop/cart` is the cheapest, most reliable claim there is.
+- **Name URLs when they matter.** `which redirects to /shop/cart` gives the verifier a cheap, reliable outcome signal.
 
 ### Other patterns that help
 
@@ -294,7 +297,7 @@ Strategy:
 
 | Name | Output |
 |---|---|
-| `list` (default) | Live human-readable progress with ✓/✗, color, per-turn timing, and deterministic `humanEvidence` from the verifier checks |
+| `list` (default) | Live human-readable progress with ✓/✗, color, per-turn timing, and verifier evidence |
 | `ndjson` | One JSON event per turn streamed to stdout, ending with a `done` envelope |
 | `json` | Single JSON object dumped at the end |
 | `trace` | Writes `results/<YYYY-MM-DDTHH-MM>H<HASH>.json` (path overridable with `--output-dir`); confirmation goes to **stderr** so machine-readable reporters keep stdout clean |
@@ -370,7 +373,6 @@ One CLI call. The verdict comes back as a short structured envelope the next age
   "goal": "...",                   // string, the input goal verbatim
   "outcome": "pass",               // string, one of: pass | fail | error (matches exit code 0 | 1 | 3)
   "evidence": "...",               // string, compact verifier/debug rationale (always present)
-  "humanEvidence": "...",          // string, nicer human verdict text shown by the list reporter
   "turns": 2,                      // number, total LLM turns executed
   "elapsedMs": 4933,               // number, total wall time
   "driverCost": 0.0001,            // number, USD — driver (executor) LLM only
@@ -379,17 +381,14 @@ One CLI call. The verdict comes back as a short structured envelope the next age
   "driverTokens": 1424,            // number, driver total tokens (input + output, incl. cache)
   "verifierTokens": 320,           // number, verifier total tokens (0 if verifier didn't run)
   "totalTokens": 1744,             // number, driverTokens + verifierTokens
-  "verifierMode": "checks",        // string | null — "checks" (claim-based) or "single" (fallback single-call verification)
   "finalUrl": "https://...",       // string
   "finalScreenshot": "final.jpg",  // string, optional — relative to --evidence-dir
-  "checks": [                      // array — one entry per verified claim; empty when verifierMode is "single"
-    { "claim": "...", "verdict": "yes", "evidence": "..." }  // verdict: yes | no | unknown ("unknown" fails as unverified)
-  ],
-  "warnings": []                   // string[], includes "unverified claim: ..." entries and verifier-fallback notices; often empty
+  "warnings": []                   // string[], usually empty
 }
 ```
 
-A `done` event is emitted even on `outcome: fail` and `outcome: error` — the envelope shape is stable; only verdict fields differ. Humans should read `humanEvidence`; automation and debugging should use `outcome`, `checks`, and `evidence`.
+A done event is emitted even on fail and error. Use outcome for automation and
+evidence for the verifier's rationale.
 
 Accessibility refs are an internal driver protocol and are not exposed in turn
 events, returned history, JSON, or trace steps. Use `target` for reports and
@@ -423,15 +422,21 @@ Stderr stays clean — only the trace reporter writes its path confirmation ther
 
 ## Release Benchmarks
 
-The deterministic local benchmark runs a delayed wizard, a grouped form with repeated labels, and permitted/forbidden navigation recovery through the real browser, executor, and verifier loops:
+The deterministic local benchmark exercises browser completion separately from
+verifier agreement:
 
 ```bash
 npm run benchmark:local -- 5
 ```
 
-Use `npm run benchmark:model -- 5` to run the same fixtures with the configured provider and recommended model; this requires normal QAgent credentials. External-site smoke runs remain available through `./run-tests.sh 5`, and network failures there do not fail the local benchmark.
+Use npm run benchmark:model -- 5 for the configured driver model. Run npm run
+benchmark:verifier for the six frozen outcome-labeled browser artifacts.
 
-The v0.9.0 deterministic baseline (one repetition, July 15, 2026) is 3/3 completed goals, 3/3 correct verdicts, 0 false passes, 0 technical terminations, median 4 turns, median 1.548 seconds, and $0 model cost. The recommended-model run also completed 3/3 goals with 3/3 correct verdicts, 0 false passes, and 0 technical terminations. The prior calculator dataset baseline remains 2 genuine completions, 3 false passes, and 15 reported failures; its external target and 20-goal dataset were not available in this worktree for a comparable rerun.
+The v0.11.0 live release set is Reply, Vorwerk, and one representative
+calculator journey, each repeated three times. Report browser completion
+separately from final-verdict agreement. AIDA is excluded until popup/new-page
+adoption is supported.
+
 
 ## CLI Reference
 

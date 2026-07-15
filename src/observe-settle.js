@@ -345,8 +345,8 @@ export function formatPreviousActionResult(entry, observation, snapshot, nextUrl
       ? `${observation.settleReason ?? 'settled'} in ${observation.settleMs}ms`
       : `did NOT settle within ${observation.settleMs}ms — page still mutating`;
     lines.push(`Previous action: ${desc} (${ms}ms; ${settleNote}).`);
-    if (entry.nativeState?.after) {
-      lines.push(`Action succeeded; resulting control state: ${JSON.stringify(entry.nativeState.after)}.`);
+    if (entry.action?.action === 'click' && !observation.urlChanged && !observation.snapshotChanged) {
+      lines.push('Click succeeded. No visible page change was observed; continue instead of repeating it solely to force a visual change.');
     }
   }
 

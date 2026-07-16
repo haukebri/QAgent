@@ -174,109 +174,40 @@ Rule of thumb: if the page has more than ~3 required fields, more than one input
 
 ---
 
-## Writing Good Goals
+## How to Write Good Tests
 
-Whether you or your coding agent writes the goal, the rules are the same. A good goal tells the driver **what to do** and tells the verifier **how to know it worked**.
+QAgent runs one natural-language goal at a time. Give it the journey, any
+inputs that matter, and the visible result that decides whether the test passed.
 
-The verifier judges the frozen final state against the same goal the driver
-received. Compact history supports explicitly required routes, interactions,
-and transient confirmations. Name the observable outcome that should decide the
-run.
-
-### Your wording sets the verification scope
-
-More detail does not automatically make a test better. It makes more things
-required. Use broad language when you want to check general functionality, and
-exact language only when the detail itself matters.
-
-For a functional test, this is enough:
-
-> `Click the button that says something like "Get started", complete the form, and pass when "Your starting point" is visible.`
-
-For a copy test, make the exact requirement explicit:
-
-> `The button text must be exactly "Get started" and the result page must display exactly "Your starting point".`
-
-Both goals are valid, but they answer different questions. The first checks
-whether a user can complete the flow. The second also checks the approved copy.
-Do not add exact wording, routes, counts, or intermediate steps unless a mismatch
-should fail the test.
-
-QAgent does not parse a separate Acceptance contract. Use separate QAgent runs
-for independent checkpoints and Playwright for deterministic workflow audits.
-
-Precision is not the same as accuracy. A precisely written expectation can
-still be wrong or impossible to prove. Browser tests can verify a displayed
-result, but they usually cannot prove which hidden business rule caused it.
-Assert the visible outcome unless the page also exposes the reason.
-
-For important flows, use a small ladder of separate tests:
-
-1. A smoke test checks that the general journey reaches the expected outcome.
-2. A functional test adds required inputs, constraints, and result values.
-3. A copy test checks the few strings that must match word for word.
-
-This makes failures easier to diagnose. If the smoke test fails, the journey is
-broken. If smoke and functionality pass but the copy test fails, the product
-still works and the mismatch is in the text or its expectation.
-
-### The most important hint: a literal success signal
-
-Replace vague end-states ("I will see the result page") with the literal text or visible element that actually appears on success. Many forms render an inline confirmation rather than navigating to a new page; if your goal says "result page" the driver will keep retrying after success and the verifier has nothing to match.
-
-> ✅ `Stop immediately when the text "Thank you for your project inquiry!" appears, even if other elements (including stale error banners) are still visible on the page.`
->
-> ❌ `End: I will see the 'result' page which tells me that I have sent the form`
-
-### Write goals around observable outcomes
-
-- **Choose semantic or exact wording deliberately.** For a functional test, `click the button that says something like "Submit Inquiry"` allows harmless wording changes. For a copy test, write `the button text must be exactly "Submit Inquiry"`. Leave volatile values out of exact quotes: a goal that requires `"Weitere 6 Produkte anzeigen"` fails when the site has 7 products; write `the button for showing more products (the number varies)` unless the number itself matters.
-- **Name expected items instead of counting them.** `the section shows "Kobold VM7" and "Kobold VG100+"` is reliably checkable; `exactly two offers` makes a small verifier model count — and miscount.
-- **Describe transient UI by its visible content.** A popup is gone from the final page; `a dialog appears offering "Weiter einkaufen" and "Zur Kasse"` gives the verifier the exact text that shows up when the dialog opens.
-- **Phrase retries and error handling conditionally.** `If the page shows "There was a problem", fix the named fields and submit again` is satisfied by a first-try success; `submit repeatedly until errors are gone` fails a run that never needed a retry.
-- **Treat exact requirements as binding.** Named products, values, routes, URLs, prohibitions, and mandatory steps are not interchangeable with similar alternatives. State permitted alternatives explicitly when either is acceptable.
-- **Name URLs when they matter.** `which redirects to /shop/cart` gives the verifier a cheap, reliable outcome signal.
-
-### Other patterns that help
-
-- **Field map for complex forms.** List every required field and a value to use, so the driver fills them all before the first submit.
-- **Disambiguate input types when the labels are ambiguous.** "Services Needed" reads like a dropdown but is actually a checkbox group — call that out: `(CHECKBOXES, not dropdown)`.
-- **Name the parts of grouped fields.** Forms with a `Name` group often expose two textboxes labelled `First` and `Last`; small models otherwise dump the full name into the first textbox they see.
-- **Spell out paired-field constraints.** `Enter Email and Confirm Email must contain the same value` prevents the "Your emails do not match" failure mode.
-- **Match the browser locale to the site.** `--locale de-DE` makes consent banners and validation messages render in the language your goal quotes — without it, a German site may serve its cookie dialog in whatever language the site guesses, confusing both driver and verifier.
-
-### Full example
-
-This is the prompt that hit 5/5 on a Gravity Forms project-inquiry form with `gpt-4.1-mini`:
-
+```bash
+qagent --url https://example.com/calculator '
+Complete the calculator for a 35-year-old woman who weighs 70 kg and wants
+body recomposition. Pass when the results show "Body recomposition" and a
+maintenance calorie target of 2,100 kcal.'
 ```
-Goal: Submit the project inquiry form.
 
-SUCCESS = the page shows the text "Thank you for your project inquiry!".
-Stop immediately when that text appears — even if other elements
-(including stale error banners from earlier submission attempts) are
-still visible on the page.
+A useful formula is:
 
-Field map (every item below is required and must be filled BEFORE the
-first submit):
-- "Name" group has two textboxes labelled "First" and "Last" — fill both.
-- "Email Address" group has "Enter Email" and "Confirm Email" — both
-  must contain admin@example.com (they must match exactly).
-- "Company Name" textbox — any company name.
-- "Project Type" dropdown — pick any non-default option.
-- "Services Needed" — these are CHECKBOXES, not a dropdown. Tick the
-  first one ("Strategy & Consultation").
-- "Project Budget" dropdown — pick any non-default option.
-- "Timeline" dropdown — pick any non-default option.
-- "Project Description" textbox — short sentence about the project.
+> **Do this** with **these important inputs**. Pass when **this observable result** appears.
 
-Strategy:
-1. Fill all required fields above.
-2. Click "Submit Inquiry".
-3. If a validation error appears AND the success text is NOT visible,
-   read the error, fix the named field, click submit again.
-4. Stop the moment "Thank you for your project inquiry!" is visible.
-```
+### Good test goals
+
+- **Smoke test:** `Complete the signup form with valid details. Pass when "Check your inbox" is visible.`
+- **Functional test:** `Add "Sauce Labs Backpack" to the cart. Pass when the cart shows "Sauce Labs Backpack" with quantity 1.`
+- **Copy test:** `Open the pricing page. Pass only if the main heading is exactly "Simple pricing".`
+- **Route test:** `Sign in with valid credentials. Pass when the URL ends in /dashboard and "Welcome back" is visible.`
+
+### Keep goals easy to verify
+
+- Name literal success text, expected values, products, or URLs instead of saying “the result page appears.”
+- Include every input whose value affects the expected result.
+- Use exact wording only when copy matters; otherwise allow harmless wording changes.
+- Mention intermediate steps or transient dialogs only when seeing them is part of the test.
+- Use separate QAgent runs for independent outcomes. Keep Playwright for durable, deterministic regression suites.
+
+For complex forms, list the required fields and values. If a control is
+ambiguous, name its type—for example, `Services Needed is a checkbox group`.
+Use `--locale de-DE` when the goal quotes localized labels or messages.
 
 ---
 

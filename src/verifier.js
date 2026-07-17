@@ -8,6 +8,7 @@ const SYSTEM_PROMPT =
   '{ "outcome": "pass" | "fail", "evidence": "<one short sentence grounded in the supplied browser facts>" }\n\n' +
   'Rules:\n' +
   '- Judge the overall outcome, not a checklist of intermediate actions.\n' +
+  '- Pass only when the supplied browser facts positively establish the complete requested outcome. Absence of a forbidden state does not prove required presence.\n' +
   '- The frozen final URL and snapshot are authoritative for the end state.\n' +
   '- Use successful and failed action history when the goal explicitly requires a route or interaction, or when a relevant state was transient.\n' +
   '- The driver terminal response is context, not proof; pass a correct visible result despite driver failure and fail an incorrect result despite driver success.\n' +

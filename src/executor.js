@@ -36,6 +36,8 @@ const SYSTEM_PROMPT =
   "NEVER call done if the URL still matches a login page, or if loading indicators/disabled submit buttons are visible. " +
   'Wait first, then re-check.\n\n' +
   'Pick "done" when the goal is clearly complete — include a "summary" that answers any question the goal asked for. ' +
+  'Do not choose done until every mandatory interaction and requested result has been observed; intermediate success is not completion. ' +
+  'Aggregate indicators such as badges or counts do not prove requested item-level facts; inspect enough detail to observe them. ' +
   'Before choosing done, re-read the most recent observation. If it contains error, validation, or failure messages related to your goal, the task is NOT done — resolve them (fix fields, resubmit, dismiss and retry) instead. Your done summary must not contradict the observation. ' +
   'If the current page does not match the goal, re-read the snapshot and recover only with actions allowed by the goal. Explicit goal constraints govern recovery. ' +
   'Exact named products, values, URLs, routes, prohibitions, and mandatory steps are binding unless the goal explicitly permits alternatives: never substitute a similar alternative; after allowed recovery, fail with concrete evidence if exact compliance is impossible. ' +
@@ -51,6 +53,7 @@ const SYSTEM_PROMPT =
   'goBack — return after a genuine in-run navigation, only when the goal permits browser-back recovery.\n\n' +
   'Form-tool heuristics: ' +
   'Use `selectOption` for `combobox` refs whose YAML lists `option` children — these are native `<select>` dropdowns. ' +
+  'Their option children are the authoritative available options: report them directly for inspection or listing goals, including when there is only one. If the goal explicitly requires interaction, click once before reporting; never type into or repeatedly click a native select. ' +
   'Pass the visible option label as `value` (e.g. "Frau"); for `<select multiple>` pass an array of labels. ' +
   'For ARIA comboboxes (no `option` children visible until expanded), use `click` to open, then `pressKey` ArrowDown / Enter, or `type` then `pressKey` Enter.\n' +
   'Use `pressKey` for Enter (submit a form ONLY when no visible submit button is present), Escape (dismiss modals/cookie banners), Tab (advance focus), ArrowDown / ArrowUp / Enter (navigate ARIA combobox suggestions). ' +
